@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetVisor AI - 실시간 네트워크 모니터</title>
+
+    <!-- 외부 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+
+    <style>
+        /* =====================================================
+           1. 디자인 토큰 (CSS Variables)
+        ===================================================== */
+        :root {
+            --bg-base: #0d0d12;
+            --bg-panel: #16161f;
+            --bg-card: #1c1c28;
+            --bg-hover: #22222f;
+
+            --text-primary: #e8e8f0;
+            --text-secondary: #8888a8;
+            --text-dim: #55556a;
+
+            --accent-blue: #4a90e2;
+            --accent-green: #3ecf8e;
+            --accent-red: #ff6b6b;
+            --accent-amber: #f6a623;
+
+            --border: #2a2a3a;
+            --border-light: #33334a;
+
+            --inbound-bg: rgba(62, 207, 142, 0.08);
+            --inbound-text: #3ecf8e;
+            --outbound-bg: rgba(255, 107, 107, 0.08);
+            --outbound-text: #ff6b6b;
+
+            --tcp-badge: rgba(148, 131, 255, 0.18);
+            --tcp-text: #b8aaff;
+            --udp-badge: rgba(80, 205, 230, 0.18);
+            --udp-text: #50cde6;
+            --other-badge: rgba(136, 136, 168, 0.18);
+            --other-text: #8888a8;
+
+            --radius-sm: 4px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+        }
+
+        /* ── 라이트 테마 ── */
+        [data-theme="light"] {
+            --bg-base: #f0f2f5;
+            --bg-panel: #ffffff;
+            --bg-card: #f8f9fb;
+            --bg-hover: #eef0f4;
+
+            --text-primary: #1a1a2e;
+            --text-secondary: #5a5a7a;
+            --text-dim: #8a8aa0;
+
+            --accent-blue: #3b7dd8;
+            --accent-green: #2bb07a;
+            --accent-red: #e05252;
+            --accent-amber: #d4910e;
+
+            --border: #d8dce5;
+            --border-light: #c5c9d4;
+
+            --inbound-bg: rgba(43, 176, 122, 0.1);
+            --inbound-text: #1f9963;
+            --outbound-bg: rgba(224, 82, 82, 0.1);
+            --outbound-text: #d04040;
+
+            --tcp-badge: rgba(110, 90, 220, 0.14);
+            --tcp-text: #6e5adc;
+            --udp-badge: rgba(40, 170, 200, 0.14);
+            --udp-text: #1a99b5;
+            --other-badge: rgba(130, 130, 160, 0.14);
+            --other-text: #6a6a8a;
+        }
+
+        /* ── 테마 토글 버튼 ── */
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            transition: all 0.25s;
+            user-select: none;
+        }
+        .theme-toggle:hover {
+            border-color: var(--accent-blue);
+            color: var(--text-primary);
+        }
+        .theme-toggle-track {
+            width: 38px;
+            height: 20px;
+            border-radius: 10px;
+            background: var(--border-light);
+            position: relative;
+            transition: background 0.3s;
+            flex-shrink: 0;
+        }
+        .theme-toggle-track::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--text-primary);
+            transition: transform 0.3s, background 0.3s;
+        }
+        [data-theme="light"] .theme-toggle-track {
+            background: var(--accent-blue);
+        }
+        [data-theme="light"] .theme-toggle-track::after {
+            transform: translateX(18px);
+            background: #fff;
+        }
+
+        /* =====================================================
+           2. 리셋 & 레이아웃 기반
+        ===================================================== */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-base);
+            color: var(--text-primary);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* =====================================================
+           3. 사이드바
+        ===================================================== */
+        .sidebar {
+            width: 220px;
+            flex-shrink: 0;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px 16px;
+            gap: 24px;
+        }
+
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sidebar-logo .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--accent-blue), #7b5ea7);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+        }
+
+        .sidebar-logo h1 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+        }
+
+        .sidebar-logo span {
+            font-size: 0.65rem;
+            color: var(--accent-blue);
+            font-weight: 500;
+        }
+
+        /* 연결 상태 */
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        .sidebar-tab.active {
+            background: rgba(74, 144, 226, 0.1);
+            color: var(--accent-blue) !important;
+            font-weight: 600;
+            border-left-color: var(--accent-blue) !important;
+        }
+
+        .sidebar-tab:hover {
+            background: var(--bg-hover);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        /* 통계 카드들 */
+        .stat-section-title {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .stat-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: border-color 0.2s;
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-light);
+        }
+
+        .stat-card .stat-label {
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stat-card .stat-label .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .stat-card .stat-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .stat-card.total .stat-value {
+            color: var(--accent-blue);
+        }
+
+        .stat-card.inbound .stat-value {
+            color: var(--inbound-text);
+        }
+
+        .stat-card.outbound .stat-value {
+            color: var(--outbound-text);
+        }
+
+        /* =====================================================
+           4. 메인 영역
+        ===================================================== */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 14px;
+            overflow: hidden;
+            min-width: 0;
+        }
+
+        /* 상단 헤더 바 */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .top-bar h2 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .pps-badge {
+            font-size: 0.78rem;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-amber);
+            background: rgba(246, 166, 35, 0.12);
+            border: 1px solid rgba(246, 166, 35, 0.25);
+            border-radius: 20px;
+            padding: 3px 10px;
+        }
+
+        .top-bar .pause-btn {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 4px 12px;
+            font-size: 0.8rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .top-bar .pause-btn:hover {
+            background: var(--bg-hover);
+        }
+
+        .top-bar .pause-btn.paused {
+            background: rgba(255, 107, 107, 0.15);
+            color: var(--accent-red);
+            border-color: rgba(255, 107, 107, 0.3);
+        }
+
+        /* 필터 바 */
+        .filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 8px 12px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+
+        .filter-bar input,
+        .filter-bar select {
+            background: var(--bg-panel);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            font-family: 'Inter', sans-serif;
+            outline: none;
+        }
+
+        .filter-bar input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .filter-bar input:focus,
+        .filter-bar select:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .filter-btn {
+            background: var(--bg-panel);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 4px 12px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: var(--bg-hover);
+        }
+
+        .filter-btn.primary {
+            background: rgba(74, 144, 226, 0.1);
+            color: var(--accent-blue);
+            border-color: rgba(74, 144, 226, 0.3);
+        }
+
+        .filter-btn.primary:hover {
+            background: rgba(74, 144, 226, 0.2);
+        }
+
+        /* 차트 카드 */
+        .chart-card {
+            height: 180px;
+            flex-shrink: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 14px 16px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .chart-title {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 14px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+        }
+
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .chart-wrap {
+            flex: 1;
+            position: relative;
+            min-height: 0;
+        }
+
+        /* 패킷 테이블 */
+        .packet-section {
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        /* 테이블 헤더 */
+        .packet-header {
+            display: grid;
+            grid-template-columns: 36px 80px 160px 130px 130px 70px 75px 1fr;
+            padding: 10px 14px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            flex-shrink: 0;
+        }
+
+        /* 패킷 리스트 스크롤 영역 */
+        .packet-list-wrap {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+
+        .packet-list-wrap::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .packet-list-wrap::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .packet-list-wrap::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 10px;
+        }
+
+        /* 페이징 컨테이너 */
+        .pagination-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 12px 0;
+            border-top: 1px solid var(--border);
+            background: var(--bg-panel);
+        }
+        .page-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .page-btn:hover {
+            border-color: var(--accent-blue);
+            color: #fff;
+        }
+        .page-btn.active {
+            background: var(--accent-blue);
+            color: #fff;
+            border-color: var(--accent-blue);
+            font-weight: 600;
+        }
+        .page-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            border-color: var(--border);
+            color: var(--text-dim);
+        }
+
+        /* 개별 패킷 행 */
+        .packet-row {
+            display: grid;
+            grid-template-columns: 36px 80px 160px 130px 130px 70px 75px 1fr;
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', monospace;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.15s;
+            align-items: center;
+        }
+
+        .packet-row:last-child {
+            border-bottom: none;
+        }
+
+        .packet-row:hover {
+            background: var(--bg-hover);
+        }
+
+        .packet-row.selected {
+            background: rgba(74, 144, 226, 0.1);
+        }
+
+        .packet-row .no {
+            color: var(--text-dim);
+        }
+
+        .packet-row .time {
+            color: var(--text-secondary);
+        }
+
+        .packet-row .ip {
+            color: var(--text-primary);
+        }
+
+        /* 체크박스 정렬 */
+        .col-checkbox {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .row-checkbox, #selectAllCheckbox {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: var(--accent-blue);
+        }
+
+        /* 배지 공통 */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+
+        /* 프로토콜 배지 */
+        .badge-tcp {
+            background: var(--tcp-badge);
+            color: var(--tcp-text);
+        }
+
+        .badge-udp {
+            background: var(--udp-badge);
+            color: var(--udp-text);
+        }
+
+        .badge-other {
+            background: var(--other-badge);
+            color: var(--other-text);
+        }
+
+        /* 방향 배지 */
+        .badge-in {
+            background: var(--inbound-bg);
+            color: var(--inbound-text);
+        }
+
+        .badge-out {
+            background: var(--outbound-bg);
+            color: var(--outbound-text);
+        }
+
+        .badge-oth {
+            background: var(--other-badge);
+            color: var(--other-text);
+        }
+
+        /* =====================================================
+           5. AI 패널 (우측)
+        ===================================================== */
+        .resizer {
+            width: 4px;
+            cursor: col-resize;
+            background: transparent;
+            transition: background 0.2s;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .resizer:hover,
+        .resizer.active {
+            background: var(--accent-blue);
+        }
+
+        .ai-panel {
+            width: 400px;
+            min-width: 300px;
+            max-width: 900px;
+            flex-shrink: 0;
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 16px;
+            gap: 12px;
+        }
+
+        .ai-panel-title {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        .ai-box {
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 14px;
+            font-size: 0.82rem;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            overflow-y: auto;
+        }
+
+        .ai-box::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .ai-box::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 10px;
+        }
+
+        .ai-detail-row {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .ai-detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .ai-detail-label {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .ai-detail-value {
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            word-break: break-all;
+        }
+
+        .ai-opinion {
+            margin-top: 10px;
+            padding: 10px 12px;
+            background: rgba(74, 144, 226, 0.07);
+            border-left: 2px solid var(--accent-blue);
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* =====================================================
+           Hex Dump 패널
+        ===================================================== */
+        .hex-panel-title {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin-top: 14px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .hex-box {
+            background: #0a0a10;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 10px 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            line-height: 1.8;
+            color: #8899bb;
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 440px;
+            white-space: pre;
+        }
+
+        .hex-box::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+
+        .hex-box::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 10px;
+        }
+
+        /* 오프셋 컬럼 색상 */
+        .hex-offset {
+            color: #445566;
+        }
+
+        /* hex 바이트 색상 */
+        .hex-bytes {
+            color: #7ab4e0;
+        }
+
+        /* ASCII 컬럼 색상 */
+        .hex-ascii {
+            color: #5a8a6a;
+        }
+
+        /* =====================================================
+           6. 빈 상태 안내
+        ===================================================== */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            height: 100%;
+            color: var(--text-dim);
+            font-size: 0.82rem;
+        }
+
+        /* =====================================================
+           AI 패널 추가 스타일
+        ===================================================== */
+        /* 로딩 스피너 */
+        .ai-loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            height: 100%;
+            color: var(--text-dim);
+            font-size: 0.82rem;
+        }
+
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border-light);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* 위험 수준 배지 */
+        .risk-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .risk-LOW {
+            background: rgba(62, 207, 142, 0.15);
+            color: #3ecf8e;
+            border: 1px solid rgba(62, 207, 142, 0.3);
+        }
+
+        .risk-MEDIUM {
+            background: rgba(246, 166, 35, 0.15);
+            color: #f6a623;
+            border: 1px solid rgba(246, 166, 35, 0.3);
+        }
+
+        .risk-HIGH {
+            background: rgba(255, 107, 107, 0.15);
+            color: #ff6b6b;
+            border: 1px solid rgba(255, 107, 107, 0.3);
+        }
+
+        /* 분류 태그 */
+        .ai-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .ai-tag {
+            font-size: 0.68rem;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: rgba(74, 144, 226, 0.1);
+            color: var(--accent-blue);
+            border: 1px solid rgba(74, 144, 226, 0.2);
+        }
+
+        /* AI 분석 텍스트 타이핑 효과 */
+        .ai-analysis-text {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            line-height: 1.75;
+            font-family: 'Inter', sans-serif;
+            white-space: pre-wrap;
+        }
+
+        /* AI 분석 오류 */
+        .ai-error {
+            padding: 10px 12px;
+            background: rgba(255, 107, 107, 0.08);
+            border-left: 2px solid var(--accent-red);
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            font-size: 0.78rem;
+            color: var(--accent-red);
+            line-height: 1.6;
+        }
+
+        /* API 상태 표시 */
+        .ai-status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .ai-status-bar .model-tag {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-blue);
+            font-size: 0.68rem;
+            background: rgba(74, 144, 226, 0.1);
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+
+        .ai-key-ok {
+            color: var(--accent-green);
+        }
+
+        .ai-key-none {
+            color: var(--accent-red);
+        }
+
+        /* 강조 패킷 행 관련 스타일 */
+        .packet-row.highlighted-packet {
+            background: rgba(246, 166, 35, 0.12) !important;
+            border-left: 3px solid var(--accent-amber);
+        }
+
+        /* 모달 공통 스타일 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 500px;
+            max-width: 90vw;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 1rem;
+            color: var(--text-primary);
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
+
+        .modal-body {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .rule-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .rule-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 12px;
+            font-size: 0.75rem;
+        }
+
+        .rule-item .rule-text {
+            color: var(--text-secondary);
+        }
+
+        .rule-item button {
+            background: rgba(255, 107, 107, 0.1);
+            color: var(--accent-red);
+            border: 1px solid rgba(255, 107, 107, 0.3);
+            border-radius: var(--radius-sm);
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 0.7rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- =========================================================
+         사이드바
+    ========================================================= -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-icon">🛰</div>
+            <div>
+                <h1>NetVisor</h1>
+                <span>AI MONITOR</span>
+            </div>
+        </div>
+
+        <div class="status-row">
+            <div class="status-dot"></div>
+            <span id="status-text">연결됨</span>
+        </div>
+
+        <!-- 내비게이션 탭 -->
+        <div style="margin: 10px 0; display: flex; flex-direction: column; gap: 8px;">
+            <div class="sidebar-tab active" id="tabLive"
+                style="padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-left: 3px solid transparent;">
+                🔴 실시간 모니터</div>
+            <div class="sidebar-tab" id="tabArchive"
+                style="padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-left: 3px solid transparent;">
+                🗃️ 저장된 패킷 조회</div>
+            <div class="sidebar-tab" id="tabHighlight"
+                style="padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--accent-amber); border-left: 3px solid transparent; font-weight: 600;">
+                🌟 강조 패킷 조회</div>
+        </div>
+
+        <div>
+            <div class="stat-section-title" style="margin-bottom:10px">패킷 통계</div>
+            <div class="stat-cards">
+                <div class="stat-card total">
+                    <div class="stat-label">전체</div>
+                    <div class="stat-value" id="count-total">0</div>
+                </div>
+                <div class="stat-card inbound">
+                    <div class="stat-label">
+                        <span class="dot" style="background:var(--inbound-text)"></span>
+                        수신 (Inbound)
+                    </div>
+                    <div class="stat-value" id="count-in">0</div>
+                </div>
+                <div class="stat-card outbound">
+                    <div class="stat-label">
+                        <span class="dot" style="background:var(--outbound-text)"></span>
+                        송신 (Outbound)
+                    </div>
+                    <div class="stat-value" id="count-out">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 테마 토글 -->
+        <div style="margin-top: auto;">
+            <div class="theme-toggle" id="themeToggle">
+                <div class="theme-toggle-track"></div>
+                <span id="themeLabel">🌙 다크 모드</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- =========================================================
+         메인 콘텐츠
+    ========================================================= -->
+    <main class="main">
+
+        <!-- 상단 바 -->
+        <div class="top-bar">
+            <h2 id="topTitle">실시간 패킷 모니터</h2>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <select id="maxPacketsSelect" class="pause-btn"
+                    style="padding: 2px 8px; font-weight: 500; outline: none; border-radius: var(--radius-md);">
+                    <option value="20">20개 보기</option>
+                    <option value="40">40개 보기</option>
+                    <option value="60">60개 보기</option>
+                    <option value="80">80개 보기</option>
+                    <option value="100">100개 보기</option>
+                </select>
+                <select id="archiveMaxPacketsSelect" class="pause-btn"
+                    style="padding: 2px 8px; font-weight: 500; outline: none; border-radius: var(--radius-md); display: none;">
+                    <option value="200" selected>200개 보기</option>
+                    <option value="400">400개 보기</option>
+                    <option value="600">600개 보기</option>
+                    <option value="800">800개 보기</option>
+                    <option value="1000">1000개 보기</option>
+                </select>
+                <button id="highlightSettingsBtn" class="pause-btn"
+                    style="color: var(--accent-amber); border-color: rgba(246, 166, 35, 0.4);">🎯 강조 규칙 설정</button>
+                <button id="saveBtn" class="pause-btn">💾 DB 저장 (Off)</button>
+                <button id="pauseBtn" class="pause-btn">⏸ 일시정지</button>
+            </div>
+        </div>
+
+        <!-- 필터 바 -->
+        <div class="filter-bar">
+            <div
+                style="color:var(--text-dim); font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-right:4px;">
+                Filter</div>
+
+            <!-- 아카이브 모드에서만 보이는 날짜선택 -->
+            <div id="archiveDateInputs" style="display: none; align-items: center; gap: 4px;">
+                <input type="datetime-local" id="filterStart" step="1">
+                <span style="color:var(--text-dim); margin:0 -4px;">~</span>
+                <input type="datetime-local" id="filterEnd" step="1">
+            </div>
+
+            <input type="text" id="filterIp" placeholder="IP Address">
+            <input type="text" id="filterPort" placeholder="Port" style="width: 70px;">
+            <select id="filterProto">
+                <option value="">Protocol (All)</option>
+                <option value="TCP">TCP</option>
+                <option value="UDP">UDP</option>
+            </select>
+            <select id="filterDir">
+                <option value="">Direction (All)</option>
+                <option value="INBOUND">Inbound</option>
+                <option value="OUTBOUND">Outbound</option>
+            </select>
+            <input type="text" id="filterMinSize" placeholder="Min Size" style="width: 80px;">
+            <span style="color:var(--text-dim); margin:0 -4px;">~</span>
+            <input type="text" id="filterMaxSize" placeholder="Max Size" style="width: 80px;">
+            <button id="applyFilterBtn" class="filter-btn primary">적용</button>
+            <button id="resetFilterBtn" class="filter-btn">초기화</button>
+            <button id="deleteSelectedBtn" class="filter-btn" style="color: var(--accent-red); border-color: rgba(255, 107, 107, 0.4); display: none; margin-left: 10px;">🗑️ 선택 삭제</button>
+        </div>
+
+        <!-- 트래픽 차트 -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="chart-title">초당 트래픽</span>
+                    <div class="pps-badge" style="padding: 2px 8px; font-size: 0.72rem;">⚡ <span
+                            id="pps-display">0</span> pkt/s</div>
+                </div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background:var(--inbound-text)"></span> 수신
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background:var(--outbound-text)"></span> 송신
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrap">
+                <canvas id="trafficChart"></canvas>
+            </div>
+        </div>
+
+        <!-- 패킷 테이블 -->
+        <div class="packet-section">
+            <div class="packet-header">
+                <div class="col-checkbox"><input type="checkbox" id="selectAllCheckbox"></div>
+                <div>#</div>
+                <div>시간</div>
+                <div>출발지 IP</div>
+                <div>목적지 IP</div>
+                <div>프로토콜</div>
+                <div>방향</div>
+                <div>크기 (bytes)</div>
+            </div>
+            <div class="packet-list-wrap">
+                <div id="packetList">
+                    <div class="empty-state">
+                        <div class="icon">📡</div>
+                        <div>패킷을 기다리는 중...</div>
+                    </div>
+                </div>
+            </div>
+            </div>
+            <!-- 페이징 렌더링 영역 -->
+            <div class="pagination-wrap" id="paginationWrap" style="display: none;"></div>
+        </div>
+
+    </main>
+
+    <div class="resizer" id="resizer"></div>
+
+    <!-- =========================================================
+         AI 패널
+    ========================================================= -->
+    <aside class="ai-panel" id="aiPanel">
+        <div class="ai-panel-title">🤖 AI 분석</div>
+        <!-- API 상태 바 -->
+        <div class="ai-status-bar" id="aiStatusBar">
+            <span id="aiKeyStatus" class="ai-key-none">⚠ API 키 미확인</span>
+            <span class="model-tag" id="aiModelTag">-</span>
+        </div>
+        <div class="ai-box" id="aiBox">
+            <div class="empty-state">
+                <div class="icon">🔍</div>
+                <div>패킷을 클릭하면<br>AI 보안 분석이 표시됩니다.</div>
+            </div>
+        </div>
+        <div class="hex-panel-title" id="hexTitle" style="display:none">
+            <span>⬡</span> Packet Bytes
+        </div>
+        <div class="hex-box" id="hexBox" style="display:none"></div>
+    </aside>
+
+    <!-- 모달: 강조 규칙 설정 -->
+    <div class="modal-overlay" id="ruleModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🎯 강조 및 자동저장 규칙 설정</h3>
+                <button class="modal-close" id="closeRuleModal">×</button>
+            </div>
+            <div class="modal-body">
+                <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                    여러 개의 조건 세트를 추가할 수 있습니다. 조건 중 하나라도 만족 시 시각적으로 강조 표시 되며 브라우저 알림이 발송되고, 별도 DB에 저장됩니다.
+                </div>
+                <!-- 입력부 -->
+                <div class="filter-bar"
+                    style="flex-direction: column; align-items: stretch; gap: 8px; background: transparent; border: none; padding: 0;">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <input type="text" id="ruleIp" placeholder="IP Address" style="flex: 1;">
+                        <input type="text" id="rulePort" placeholder="Port" style="width: 80px;">
+                        <select id="ruleProto">
+                            <option value="">Protocol</option>
+                            <option value="TCP">TCP</option>
+                            <option value="UDP">UDP</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <select id="ruleDir">
+                            <option value="">Direction</option>
+                            <option value="INBOUND">Inbound</option>
+                            <option value="OUTBOUND">Outbound</option>
+                        </select>
+                        <input type="text" id="ruleMinSize" placeholder="Min Size" style="width: 80px;">
+                        <span style="color:var(--text-dim);">~</span>
+                        <input type="text" id="ruleMaxSize" placeholder="Max Size" style="width: 80px;">
+                        <button id="addRuleBtn" class="filter-btn primary" style="margin-left: auto;">+ 추가</button>
+                    </div>
+                </div>
+                <!-- 리스트부 -->
+                <div class="rule-list" id="ruleListContainer">
+                    <div class="empty-state" id="ruleEmptyState" style="padding: 20px 0;">설정된 강조 규칙이 없습니다.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="filter-btn" id="cancelRuleBtn">취소</button>
+                <button class="filter-btn primary" id="saveRuleBtn">서버에 적용</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         JavaScript
+    ========================================================= -->
+    <script>
+        // ── 테마 전환 ──────────────────────────────────────────
+        (function initTheme() {
+            const saved = localStorage.getItem('netvisor-theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', saved);
+            const label = document.getElementById('themeLabel');
+            if (label) label.textContent = saved === 'light' ? '☀️ 라이트 모드' : '🌙 다크 모드';
+        })();
+
+        document.getElementById('themeToggle').addEventListener('click', () => {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('netvisor-theme', next);
+            document.getElementById('themeLabel').textContent =
+                next === 'light' ? '☀️ 라이트 모드' : '🌙 다크 모드';
+
+            // Chart.js 그리드 색상도 테마에 맞게 전환
+            if (typeof trafficChart !== 'undefined' && trafficChart.options) {
+                const gridColor = next === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.05)';
+                const tickColor = next === 'light' ? '#8a8aa0' : '#55556a';
+                trafficChart.options.scales.y.grid.color = gridColor;
+                trafficChart.options.scales.y.ticks.color = tickColor;
+                trafficChart.update('none');
+            }
+        });
+
+        // ── 연결 ──────────────────────────────────────────────
+        const socket = io();
+
+        // ── 전역 상태 ──────────────────────────────────────────
+        let currentMode = 'LIVE'; // 'LIVE' or 'ARCHIVE'
+        let isSaving = false;
+
+        // ── DOM 참조 ──────────────────────────────────────────
+        const packetList = document.getElementById('packetList');
+        const countTotal = document.getElementById('count-total');
+        const countIn = document.getElementById('count-in');
+        const countOut = document.getElementById('count-out');
+        const ppsDisplay = document.getElementById('pps-display');
+        const statusText = document.getElementById('status-text');
+
+        const tabLive = document.getElementById('tabLive');
+        const tabArchive = document.getElementById('tabArchive');
+        const tabHighlight = document.getElementById('tabHighlight');
+        const topTitle = document.getElementById('topTitle');
+        const chartCard = document.querySelector('.chart-card');
+        const archiveDateInputs = document.getElementById('archiveDateInputs');
+        const saveBtn = document.getElementById('saveBtn');
+
+        const pauseBtn = document.getElementById('pauseBtn');
+        const maxPacketsSelect = document.getElementById('maxPacketsSelect');
+        const applyFilterBtn = document.getElementById('applyFilterBtn');
+        const resetFilterBtn = document.getElementById('resetFilterBtn');
+
+        // 표시 개수 변경 시 즉시 목록 정리
+        maxPacketsSelect.addEventListener('change', () => {
+            const maxCount = parseInt(maxPacketsSelect.value, 10);
+            while (packetList.children.length > maxCount) {
+                packetList.lastChild.remove();
+            }
+        });
+
+        // ── 탭 및 페이징 상태 ──────────────────────────────────────────
+        let currentPage = 1;
+
+        // ── 탭 및 모드 전환 ──────────────────────────────────────────
+        function setMode(mode) {
+            currentMode = mode;
+            packetList.innerHTML = '';
+
+            tabLive.classList.remove('active');
+            tabArchive.classList.remove('active');
+            tabHighlight.classList.remove('active');
+            tabHighlight.style.backgroundColor = '';
+
+            const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+            const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+            const maxPacketsSelect = document.getElementById('maxPacketsSelect');
+            const archiveMaxPacketsSelect = document.getElementById('archiveMaxPacketsSelect');
+            const paginationWrap = document.getElementById('paginationWrap');
+            if (selectAllCheckbox) selectAllCheckbox.checked = false;
+
+            if (mode === 'LIVE') {
+                tabLive.classList.add('active');
+                topTitle.textContent = '실시간 패킷 모니터';
+                chartCard.style.display = 'block';
+                pauseBtn.style.display = 'block';
+                saveBtn.style.display = 'block';
+                archiveDateInputs.style.display = 'none';
+                if (deleteSelectedBtn) deleteSelectedBtn.style.display = 'none';
+                if (selectAllCheckbox) selectAllCheckbox.disabled = true;
+                if (maxPacketsSelect) maxPacketsSelect.style.display = 'block';
+                if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'none';
+                if (paginationWrap) paginationWrap.style.display = 'none';
+                sendFilter();
+            } else if (mode === 'ARCHIVE') {
+                tabArchive.classList.add('active');
+                topTitle.textContent = '데이터베이스 패킷 조회';
+                chartCard.style.display = 'none';
+                pauseBtn.style.display = 'none';
+                saveBtn.style.display = 'none';
+                archiveDateInputs.style.display = 'flex';
+                if (deleteSelectedBtn) deleteSelectedBtn.style.display = 'inline-block';
+                if (selectAllCheckbox) selectAllCheckbox.disabled = false;
+                if (maxPacketsSelect) maxPacketsSelect.style.display = 'none';
+                if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'block';
+                currentPage = 1;
+                sendFilter();
+            } else if (mode === 'HIGHLIGHT') {
+                tabHighlight.classList.add('active');
+                tabHighlight.style.backgroundColor = 'rgba(246, 166, 35, 0.1)';
+                topTitle.textContent = '🌟 강조 패킷 데이터베이스 조회';
+                chartCard.style.display = 'none';
+                pauseBtn.style.display = 'none';
+                saveBtn.style.display = 'none';
+                archiveDateInputs.style.display = 'flex';
+                if (deleteSelectedBtn) deleteSelectedBtn.style.display = 'inline-block';
+                if (selectAllCheckbox) selectAllCheckbox.disabled = false;
+                if (maxPacketsSelect) maxPacketsSelect.style.display = 'none';
+                if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'block';
+                currentPage = 1;
+                sendFilter();
+            }
+        }
+
+        tabLive.addEventListener('click', () => setMode('LIVE'));
+        tabArchive.addEventListener('click', () => setMode('ARCHIVE'));
+        tabHighlight.addEventListener('click', () => setMode('HIGHLIGHT'));
+
+        // ── 삭제 로직 ──────────────────────────────────────────────
+        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+        const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+
+        if (selectAllCheckbox) {
+            selectAllCheckbox.addEventListener('change', (e) => {
+                const isChecked = e.target.checked;
+                document.querySelectorAll('.row-checkbox').forEach(cb => {
+                    cb.checked = isChecked;
+                });
+            });
+        }
+
+        if (deleteSelectedBtn) {
+            deleteSelectedBtn.addEventListener('click', async () => {
+                const checkedBoxes = document.querySelectorAll('.row-checkbox:checked');
+                if (checkedBoxes.length === 0) {
+                    alert('삭제할 패킷을 선택해주세요.');
+                    return;
+                }
+                
+                if (!confirm(`선택한 ${checkedBoxes.length}개의 패킷을 영구 삭제하시겠습니까?`)) {
+                    return;
+                }
+
+                const ids = Array.from(checkedBoxes).map(cb => parseInt(cb.value, 10));
+                
+                try {
+                    const res = await fetch('/api/delete-packets', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            db_type: currentMode, // 'ARCHIVE' or 'HIGHLIGHT'
+                            ids: ids
+                        })
+                    });
+                    const result = await res.json();
+                    if (result.success) {
+                        if (selectAllCheckbox) selectAllCheckbox.checked = false;
+                        sendFilter(); // 리스트 갱신
+                    } else {
+                        alert('삭제 실패: ' + result.error);
+                    }
+                } catch (err) {
+                    alert('삭제 요청 중 오류 발생: ' + err.message);
+                }
+            });
+        }
+
+        // ── DB 저장 토글 ───────────────────────────────────────────
+        saveBtn.addEventListener('click', async () => {
+            isSaving = !isSaving;
+            saveBtn.textContent = isSaving ? '💾 DB 저장 (On)' : '💾 DB 저장 (Off)';
+            saveBtn.style.color = isSaving ? 'var(--accent-amber)' : 'var(--text-primary)';
+            try {
+                await fetch('/api/toggle-save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ saving: isSaving })
+                });
+            } catch (e) { }
+        });
+
+        // ── 필터 로직 ──────────────────────────────────────────
+        async function sendFilter() {
+            const filterObj = {
+                ip: document.getElementById('filterIp').value,
+                port: document.getElementById('filterPort').value,
+                proto: document.getElementById('filterProto').value,
+                dir: document.getElementById('filterDir').value,
+                min_size: document.getElementById('filterMinSize').value,
+                max_size: document.getElementById('filterMaxSize').value,
+            };
+
+            if (currentMode === 'LIVE') {
+                const paginationWrap = document.getElementById('paginationWrap');
+                if (paginationWrap) paginationWrap.style.display = 'none';
+                try {
+                    await fetch('/api/set-filter', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(filterObj)
+                    });
+                    packetList.innerHTML = '<div class="empty-state"><div class="icon">📡</div><div>필터 조건에 맞는 패킷을 기다리는 중...</div></div>';
+                } catch (e) {
+                    console.error("Filter apply failed", e);
+                }
+            } else {
+                // ARCHIVE 모드
+                const archiveMaxPacketsSelect = document.getElementById('archiveMaxPacketsSelect');
+                const limit = parseInt(archiveMaxPacketsSelect ? archiveMaxPacketsSelect.value : "200", 10);
+                
+                filterObj.start_time = document.getElementById('filterStart').value.replace('T', ' ');
+                filterObj.end_time = document.getElementById('filterEnd').value.replace('T', ' ');
+                filterObj.limit = limit;
+                filterObj.page = currentPage;
+                
+                packetList.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><div>조회 중...</div></div>';
+                try {
+                    const endpoint = currentMode === 'HIGHLIGHT' ? '/api/highlight-history' : '/api/history';
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(filterObj)
+                    });
+                    const result = await res.json();
+
+                    packetList.innerHTML = '';
+                    if (!result.data || result.data.length === 0) {
+                        packetList.innerHTML = '<div class="empty-state"><div>해당 조건에 저장된 패킷이 없습니다.</div></div>';
+                        document.getElementById('paginationWrap').style.display = 'none';
+                        return;
+                    }
+                    result.data.forEach(data => {
+                        const dirBadge = data.direction === 'INBOUND' ? '<span class="badge badge-in">↓ IN</span>' :
+                            data.direction === 'OUTBOUND' ? '<span class="badge badge-out">↑ OUT</span>' :
+                                '<span class="badge badge-oth">— —</span>';
+                        const pBadge = data.proto === 'TCP' ? '<span class="badge badge-tcp">TCP</span>' :
+                            data.proto === 'UDP' ? '<span class="badge badge-udp">UDP</span>' :
+                                '<span class="badge badge-other">' + data.proto + '</span>';
+
+                        const row = document.createElement('div');
+                        row.className = 'packet-row';
+                        row.innerHTML = `
+                            <div class="col-checkbox"><input type="checkbox" class="row-checkbox" value="${data.no}"></div>
+                            <div class="no">${data.no}</div>
+                            <div class="time">${data.time}</div>
+                            <div class="ip">${data.src}</div>
+                            <div class="ip">${data.dst}</div>
+                            <div>${pBadge}</div>
+                            <div>${dirBadge}</div>
+                            <div style="color:var(--text-secondary)">${data.len}</div>
+                        `;
+                        row.addEventListener('click', (e) => {
+                            if (e.target.type === 'checkbox') return;
+                            document.querySelectorAll('.packet-row').forEach(r => r.classList.remove('selected'));
+                            row.classList.add('selected');
+                            showAnalysis(data);
+                        });
+                        packetList.appendChild(row);
+                    });
+                    
+                    renderPagination(result.total, limit);
+                } catch (e) {
+                    packetList.innerHTML = '<div class="empty-state"><div>오류 발생</div></div>';
+                    document.getElementById('paginationWrap').style.display = 'none';
+                }
+            }
+        }
+
+        function renderPagination(total, limit) {
+            const paginationWrap = document.getElementById('paginationWrap');
+            if (!paginationWrap) return;
+            
+            const totalPages = Math.ceil(total / limit);
+            if (totalPages <= 1) {
+                paginationWrap.style.display = 'none';
+                return;
+            }
+            
+            paginationWrap.style.display = 'flex';
+            paginationWrap.innerHTML = '';
+            
+            const createBtn = (text, page, disabled = false, active = false) => {
+                const btn = document.createElement('button');
+                btn.className = 'page-btn';
+                if (active) btn.classList.add('active');
+                btn.textContent = text;
+                btn.disabled = disabled;
+                btn.addEventListener('click', () => {
+                    currentPage = page;
+                    sendFilter();
+                });
+                return btn;
+            };
+            
+            // Prev
+            paginationWrap.appendChild(createBtn('<<', 1, currentPage === 1));
+            paginationWrap.appendChild(createBtn('<', currentPage - 1, currentPage === 1));
+            
+            // Pages (10개 노출)
+            let startPage = Math.max(1, currentPage - 5);
+            let endPage = Math.min(totalPages, startPage + 9);
+            if (endPage - startPage < 9) {
+                startPage = Math.max(1, endPage - 9);
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                paginationWrap.appendChild(createBtn(i, i, false, i === currentPage));
+            }
+            
+            // Next
+            paginationWrap.appendChild(createBtn('>', currentPage + 1, currentPage === totalPages));
+            paginationWrap.appendChild(createBtn('>>', totalPages, currentPage === totalPages));
+        }
+
+        document.getElementById('archiveMaxPacketsSelect').addEventListener('change', () => {
+            currentPage = 1;
+            sendFilter();
+        });
+
+        applyFilterBtn.addEventListener('click', () => {
+            currentPage = 1;
+            sendFilter();
+        });
+        
+        resetFilterBtn.addEventListener('click', () => {
+            document.getElementById('filterIp').value = '';
+            document.getElementById('filterPort').value = '';
+            document.getElementById('filterProto').value = '';
+            document.getElementById('filterDir').value = '';
+            document.getElementById('filterMinSize').value = '';
+            document.getElementById('filterMaxSize').value = '';
+            document.getElementById('filterStart').value = '';
+            document.getElementById('filterEnd').value = '';
+            currentPage = 1;
+            sendFilter();
+        });
+
+        // ── 일시정지 로직 ──────────────────────────────────────
+        let isPaused = false;
+        pauseBtn.addEventListener('click', async () => {
+            isPaused = !isPaused;
+            pauseBtn.classList.toggle('paused', isPaused);
+            pauseBtn.innerHTML = isPaused ? '▶ 계속 (일시정지됨)' : '⏸ 일시정지';
+
+            try {
+                await fetch('/api/toggle-pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paused: isPaused })
+                });
+            } catch (e) {
+                console.error('일시정지 상태 변경 실패:', e);
+            }
+        });
+
+        // ── 카운터 ────────────────────────────────────────────
+        let total = 0, inCount = 0, outCount = 0;
+        let ppsIn = 0, ppsOut = 0;
+        let firstPacket = true;   // 최초 도착 시 empty-state 제거용
+
+        // ── 연결 상태 이벤트 ──────────────────────────────────
+        socket.on('disconnect', () => {
+            statusText.textContent = '연결 끊김';
+            document.querySelector('.status-dot').style.background = 'var(--accent-red)';
+        });
+        socket.on('connect', () => {
+            statusText.textContent = '연결됨';
+            document.querySelector('.status-dot').style.background = 'var(--accent-green)';
+        });
+
+        // ── Chart.js 설정 ─────────────────────────────────────
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        const CHART_POINTS = 30;
+
+        const trafficChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(CHART_POINTS).fill(''),
+                datasets: [
+                    {
+                        label: '수신 (Inbound)',
+                        data: Array(CHART_POINTS).fill(0),
+                        borderColor: '#3ecf8e',
+                        backgroundColor: 'rgba(62, 207, 142, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 0,
+                    },
+                    {
+                        label: '송신 (Outbound)',
+                        data: Array(CHART_POINTS).fill(0),
+                        borderColor: '#ff6b6b',
+                        backgroundColor: 'rgba(255, 107, 107, 0.08)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 0,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 200 },
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: {
+                        display: false,
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: {
+                            color: '#55556a',
+                            font: { size: 10, family: 'JetBrains Mono' },
+                            maxTicksLimit: 5,
+                            precision: 0,
+                        }
+                    }
+                }
+            }
+        });
+
+        // 0.2초마다 차트 업데이트 (× 5 환산으로 pkt/s 표시)
+        const INTERVAL_MS = 200;
+        setInterval(() => {
+            trafficChart.data.datasets[0].data.push(ppsIn);
+            trafficChart.data.datasets[0].data.shift();
+            trafficChart.data.datasets[1].data.push(ppsOut);
+            trafficChart.data.datasets[1].data.shift();
+            trafficChart.update('none');
+
+            // 200ms 단위 카운트 → 초당 환산 (× 5)
+            ppsDisplay.textContent = (ppsIn + ppsOut) * (1000 / INTERVAL_MS);
+            ppsIn = 0;
+            ppsOut = 0;
+        }, INTERVAL_MS);
+
+        // ── 패킷 수신 이벤트 ──────────────────────────────────
+        socket.on('new_packet', (data) => {
+            if (currentMode === 'ARCHIVE' || currentMode === 'HIGHLIGHT') return; // 아카이브/강조 모드일 때는 그리지 않음
+
+            // 최초 패킷 도착 시 empty-state 제거
+            if (firstPacket) {
+                packetList.innerHTML = '';
+                firstPacket = false;
+            }
+
+            const dir = data.direction || 'OTHER';
+
+            // 카운터 업데이트
+            total++;
+            if (dir === 'INBOUND') { inCount++; ppsIn++; }
+            else if (dir === 'OUTBOUND') { outCount++; ppsOut++; }
+
+            countTotal.textContent = total;
+            countIn.textContent = inCount;
+            countOut.textContent = outCount;
+
+            // 방향 배지 결정
+            let dirBadge = '';
+            if (dir === 'INBOUND') dirBadge = '<span class="badge badge-in">↓ IN</span>';
+            else if (dir === 'OUTBOUND') dirBadge = '<span class="badge badge-out">↑ OUT</span>';
+            else dirBadge = '<span class="badge badge-oth">— —</span>';
+
+            // 프로토콜 배지 결정
+            const proto = data.proto || 'OTHER';
+            let protoBadge = '';
+            if (proto === 'TCP') protoBadge = '<span class="badge badge-tcp">TCP</span>';
+            else if (proto === 'UDP') protoBadge = '<span class="badge badge-udp">UDP</span>';
+            else protoBadge = '<span class="badge badge-other">' + proto + '</span>';
+
+            // 시간 렌더링 로직
+            let timeStr = data.time || '';
+            // 혹시나 이전 버전의 Unix Epoch 숫자 문자열인 경우 대비
+            if (!timeStr.includes('-') && !isNaN(parseFloat(timeStr))) {
+                const d = new Date(parseFloat(timeStr) * 1000);
+                const hh = String(d.getHours()).padStart(2, '0');
+                const mm = String(d.getMinutes()).padStart(2, '0');
+                const ss = String(d.getSeconds()).padStart(2, '0');
+                timeStr = `${hh}:${mm}:${ss}`;
+            }
+
+            // 행 생성
+            const row = document.createElement('div');
+            row.className = 'packet-row';
+            if (data.highlight) {
+                row.className += ' highlighted-packet';
+                if (Notification.permission === 'granted') {
+                    new Notification('🚨 주요 패킷 감지!', {
+                        body: `[${data.proto}] ${data.src} → ${data.dst} (${data.len} bytes)`,
+                        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🚨</text></svg>'
+                    });
+                }
+            }
+            row.innerHTML = `
+                <div class="col-checkbox"><input type="checkbox" class="row-checkbox" value="${data.no}"></div>
+                <div class="no">${data.no}</div>
+                <div class="time">${timeStr}</div>
+                <div class="ip">${data.src}</div>
+                <div class="ip">${data.dst}</div>
+                <div>${protoBadge}</div>
+                <div>${dirBadge}</div>
+                <div style="color:var(--text-secondary)">${data.len}</div>
+            `;
+
+            // 클릭 시 AI 분석 패널 업데이트
+            row.addEventListener('click', (e) => {
+                if (e.target.type === 'checkbox') return;
+                document.querySelectorAll('.packet-row').forEach(r => r.classList.remove('selected'));
+                row.classList.add('selected');
+                showAnalysis(data);
+            });
+
+            packetList.prepend(row);
+
+            // 동적으로 최대 유지 개수 계산
+            const maxCount = parseInt(maxPacketsSelect.value, 10);
+            while (packetList.children.length > maxCount) {
+                packetList.lastChild.remove();
+            }
+        });
+
+        // ── Hex Dump 포맷터 ───────────────────────────────────
+        function formatHexDump(hexStr) {
+            if (!hexStr) return '(데이터 없음)';
+
+            // hex 문자열 → byte 배열
+            const bytes = [];
+            for (let i = 0; i < hexStr.length; i += 2) {
+                bytes.push(parseInt(hexStr.substr(i, 2), 16));
+            }
+
+            const lines = [];
+            for (let offset = 0; offset < bytes.length; offset += 16) {
+                const chunk = bytes.slice(offset, offset + 16);
+
+                // 오프셋
+                const offsetStr = offset.toString(16).padStart(4, '0');
+
+                // hex 그룹 (8 + 8, 가운데 공백)
+                const hexArr = chunk.map(b => b.toString(16).padStart(2, '0'));
+                const left = hexArr.slice(0, 8).join(' ').padEnd(23);
+                const right = hexArr.slice(8).join(' ').padEnd(23);
+
+                // ASCII
+                const ascii = chunk.map(b =>
+                    (b >= 0x20 && b < 0x7f) ? String.fromCharCode(b) : '·'
+                ).join('');
+
+                lines.push(
+                    `<span class="hex-offset">${offsetStr}</span>` +
+                    `  <span class="hex-bytes">${left}  ${right}</span>` +
+                    `  <span class="hex-ascii">${ascii}</span>`
+                );
+            }
+            return lines.join('\n');
+        }
+
+        // ── AI 분석 패널 ──────────────────────────────────────
+        let _analysisAbort = null;   // fetch 취소용 AbortController
+
+        async function showAnalysis(data) {
+            // Hex Dump 업데이트
+            const hexTitle = document.getElementById('hexTitle');
+            const hexBox = document.getElementById('hexBox');
+            hexTitle.style.display = 'flex';
+            hexBox.style.display = 'block';
+            hexBox.innerHTML = formatHexDump(data.raw || '');
+
+            // 기존 요청 취소
+            if (_analysisAbort) _analysisAbort.abort();
+            _analysisAbort = new AbortController();
+
+            const aiBox = document.getElementById('aiBox');
+
+            // ① 기본 패킷 정보 즉시 표시 + 로딩 스피너
+            const dir = data.direction || 'OTHER';
+            const dirLabel = dir === 'INBOUND' ? '수신 (Inbound)'
+                : dir === 'OUTBOUND' ? '송신 (Outbound)' : '기타';
+
+            aiBox.innerHTML = `
+                <div class="ai-detail-row">
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">패킷 번호</span>
+                        <span class="ai-detail-value">#${data.no}</span>
+                    </div>
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">방향</span>
+                        <span class="ai-detail-value">${dirLabel}</span>
+                    </div>
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">출발지</span>
+                        <span class="ai-detail-value">${data.src}</span>
+                    </div>
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">목적지</span>
+                        <span class="ai-detail-value">${data.dst}</span>
+                    </div>
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">프로토콜 / 크기</span>
+                        <span class="ai-detail-value">${data.proto} / ${data.len} bytes</span>
+                    </div>
+                    <div class="ai-detail-item">
+                        <span class="ai-detail-label">요약</span>
+                        <span class="ai-detail-value" style="font-size:0.75rem;color:var(--text-secondary)">${data.summary}</span>
+                    </div>
+                    <!-- AI 분석 영역 -->
+                    <div class="ai-detail-item" id="aiResultArea">
+                        <span class="ai-detail-label">🤖 AI 보안 분석</span>
+                        <button id="runAnalysisBtn" class="filter-btn primary" style="width: 100%; margin-top: 8px;">분석하기</button>
+                    </div>
+                </div>
+            `;
+
+            // ② 분석하기 버튼 클릭 시 AI API 호출
+            const runAnalysisBtn = document.getElementById('runAnalysisBtn');
+            if (runAnalysisBtn) {
+                runAnalysisBtn.addEventListener('click', async () => {
+                    const area = document.getElementById('aiResultArea');
+                    area.innerHTML = `
+                        <span class="ai-detail-label">🤖 AI 보안 분석</span>
+                        <div class="ai-loading">
+                            <div class="spinner"></div>
+                            <span>AI 분석 중...</span>
+                        </div>
+                    `;
+
+                    try {
+                        const resp = await fetch('/api/analyze', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data),
+                            signal: _analysisAbort.signal,
+                        });
+
+                        const result = await resp.json();
+                        const checkArea = document.getElementById('aiResultArea');
+                        if (!checkArea) return;
+
+                        if (result.success) {
+                            // 위험 수준 배지
+                            const riskBadge = `<span class="risk-badge risk-${result.risk_level}">
+                                ${result.risk_level === 'HIGH' ? '🔴' :
+                                    result.risk_level === 'MEDIUM' ? '🟡' : '🟢'}
+                                ${result.risk_level}
+                            </span>`;
+
+                            // 태그
+                            const tagsHtml = result.tags && result.tags.length
+                                ? `<div class="ai-tags">${result.tags.map(t => `<span class="ai-tag">${t}</span>`).join('')}</div>`
+                                : '';
+
+                            checkArea.innerHTML = `
+                                <span class="ai-detail-label">🤖 AI 보안 분석</span>
+                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                    ${riskBadge}
+                                </div>
+                                ${tagsHtml}
+                                <div class="ai-opinion ai-analysis-text" id="analysisText"></div>
+                            `;
+
+                            // 타이핑 효과
+                            typeText(document.getElementById('analysisText'), result.analysis);
+                        } else {
+                            checkArea.innerHTML = `
+                                <span class="ai-detail-label">🤖 AI 보안 분석</span>
+                                <div class="ai-error">⚠ ${result.error || '분석에 실패했습니다.'}</div>
+                            `;
+                        }
+                    } catch (err) {
+                        if (err.name === 'AbortError') return;  // 취소된 경우 무시
+                        const errorArea = document.getElementById('aiResultArea');
+                        if (errorArea) {
+                            errorArea.innerHTML = `
+                                <span class="ai-detail-label">🤖 AI 보안 분석</span>
+                                <div class="ai-error">⚠ 서버 통신 오류: ${err.message}</div>
+                            `;
+                        }
+                    }
+                });
+            }
+        }
+
+        // ── 타이핑 효과 ───────────────────────────────────────
+        function typeText(el, text, speed = 12) {
+            if (!el || !text) return;
+            let i = 0;
+            el.textContent = '';
+            const timer = setInterval(() => {
+                el.textContent += text[i++];
+                if (i >= text.length) clearInterval(timer);
+            }, speed);
+        }
+
+        // ── 강조 규칙 설정 로직 ────────────────────────────────
+        const highlightSettingsBtn = document.getElementById('highlightSettingsBtn');
+        const ruleModal = document.getElementById('ruleModal');
+        const closeRuleModal = document.getElementById('closeRuleModal');
+        const cancelRuleBtn = document.getElementById('cancelRuleBtn');
+        const saveRuleBtn = document.getElementById('saveRuleBtn');
+        const addRuleBtn = document.getElementById('addRuleBtn');
+        const ruleListContainer = document.getElementById('ruleListContainer');
+        const ruleEmptyState = document.getElementById('ruleEmptyState');
+
+        // 권한 요청 함수
+        function requestNotificationPermission() {
+            if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+                Notification.requestPermission();
+            }
+        }
+
+        let savedRules = []; // 서버로 전송할 리스트
+
+        function renderRuleList() {
+            ruleListContainer.innerHTML = '';
+            if (savedRules.length === 0) {
+                ruleListContainer.appendChild(ruleEmptyState);
+            } else {
+                savedRules.forEach((rule, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'rule-item';
+
+                    const conditions = [];
+                    if (rule.ip) conditions.push(`IP: ${rule.ip}`);
+                    if (rule.port) conditions.push(`Port: ${rule.port}`);
+                    if (rule.proto) conditions.push(`Proto: ${rule.proto}`);
+                    if (rule.dir) conditions.push(`Dir: ${rule.dir}`);
+                    if (rule.min_size || rule.max_size) conditions.push(`Size: ${rule.min_size || 0}~${rule.max_size || '무한'}`);
+
+                    item.innerHTML = `
+                        <div class="rule-text">${conditions.length > 0 ? conditions.join(', ') : '전체 패킷 (조건 확인 요망)'}</div>
+                        <button onclick="removeRule(${idx})">삭제</button>
+                    `;
+                    ruleListContainer.appendChild(item);
+                });
+            }
+        }
+
+        window.removeRule = function (idx) {
+            savedRules.splice(idx, 1);
+            renderRuleList();
+        };
+
+        addRuleBtn.addEventListener('click', () => {
+            const ruleObj = {
+                ip: document.getElementById('ruleIp').value.trim(),
+                port: document.getElementById('rulePort').value.trim(),
+                proto: document.getElementById('ruleProto').value.trim(),
+                dir: document.getElementById('ruleDir').value.trim(),
+                min_size: document.getElementById('ruleMinSize').value.trim(),
+                max_size: document.getElementById('ruleMaxSize').value.trim()
+            };
+            
+            const isEmpty = !ruleObj.ip && !ruleObj.port && !ruleObj.proto && !ruleObj.dir && !ruleObj.min_size && !ruleObj.max_size;
+            if (isEmpty) {
+                alert('최소 한 가지 이상의 조건을 지정해주세요.');
+                return;
+            }
+
+            savedRules.push(ruleObj);
+
+            // 폼 초기화
+            document.getElementById('ruleIp').value = '';
+            document.getElementById('rulePort').value = '';
+            document.getElementById('ruleProto').value = '';
+            document.getElementById('ruleDir').value = '';
+            document.getElementById('ruleMinSize').value = '';
+            document.getElementById('ruleMaxSize').value = '';
+
+            renderRuleList();
+        });
+
+        highlightSettingsBtn.addEventListener('click', () => {
+            requestNotificationPermission(); // 모달 열때 알림 권한 묻기
+            ruleModal.classList.add('active');
+            renderRuleList();
+        });
+
+        closeRuleModal.addEventListener('click', () => ruleModal.classList.remove('active'));
+        cancelRuleBtn.addEventListener('click', () => ruleModal.classList.remove('active'));
+
+        saveRuleBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/set-highlight-rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rules: savedRules })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    ruleModal.classList.remove('active');
+                } else {
+                    alert('저장에 실패했습니다.');
+                }
+            } catch (e) {
+                alert('서버 오류 발생');
+            }
+        });
+
+        // ── AI 패널 리사이징 로직 ───────────────────────────────
+        const resizer = document.getElementById('resizer');
+        const aiPanel = document.getElementById('aiPanel');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            resizer.classList.add('active');
+            document.body.style.userSelect = 'none'; // 텍스트 선택 방지
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            // 오른쪽에서부터 커서까지의 거리 = 브라우저 윈도우 폭 - 마우스 X 좌표
+            let newWidth = window.innerWidth - e.clientX;
+            // CSS에 지정된 min / max를 자바스크립트에서도 제한 처리 (좀 더 부드러움)
+            if (newWidth < 300) newWidth = 300;
+            if (newWidth > 900) newWidth = 900;
+            aiPanel.style.width = `${newWidth}px`;
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                resizer.classList.remove('active');
+                document.body.style.userSelect = '';
+            }
+        });
+
+        // ── 페이지 로드 시 AI 상태 확인 ──────────────────────
+        (async () => {
+            try {
+                const r = await fetch('/api/ai-status');
+                const s = await r.json();
+                const keyEl = document.getElementById('aiKeyStatus');
+                const modelEl = document.getElementById('aiModelTag');
+                if (s.configured) {
+                    keyEl.textContent = `✓ ${s.backend}`;
+                    keyEl.className = 'ai-key-ok';
+                } else {
+                    keyEl.textContent = '⚠ API 키 미설정 (.env 확인)';
+                    keyEl.className = 'ai-key-none';
+                }
+                modelEl.textContent = s.model || '-';
+                modelEl.title = `백엔드: ${s.base_url}`;  // 마우스 오버 시 URL 표시
+            } catch (e) {
+                console.warn('AI 상태 확인 실패:', e);
+            }
+        })();
+    </script>
+
+</body>
+
+</html>
