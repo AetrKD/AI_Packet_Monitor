@@ -21,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-
+# ─── config.json 로드 ──────────────────────────────────────────
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 
 def _load_config() -> dict:
@@ -39,7 +39,7 @@ def _load_config() -> dict:
 _config = _load_config()
 _ai_cfg = _config.get("ai", {})
 
-
+# ─── IP 정보 조회 헬퍼 ─────────────────────────────────────────
 def _get_ip_info(ip_str: str) -> str:
     """IP의 국가 및 조직 정보를 가져옵니다 (ip-api.com 활용)"""
     if not ip_str or ip_str == '?':
@@ -61,7 +61,10 @@ def _get_ip_info(ip_str: str) -> str:
         pass
     return "조회 불가"
 
-
+# ──────────────────────────────────────────────────────────────
+# OpenAI 호환 클라이언트 초기화
+# base_url 이 설정되면 LM Studio / Ollama 등 로컬 LLM 사용 가능
+# ──────────────────────────────────────────────────────────────
 try:
     from openai import OpenAI
 
@@ -92,7 +95,9 @@ except ImportError:
     _client = None
 
 
-
+# ──────────────────────────────────────────────────────────────
+# 시스템 프롬프트
+# ──────────────────────────────────────────────────────────────
 _SYSTEM_PROMPT = (
     "당신은 최고 수준의 네트워크 보안 분석가입니다. "
     "사용자가 제공하는 네트워크 패킷 정보를 바탕으로 "
@@ -101,7 +106,9 @@ _SYSTEM_PROMPT = (
 )
 
 
-
+# ──────────────────────────────────────────────────────────────
+# 핵심 분석 함수
+# ──────────────────────────────────────────────────────────────
 def analyze_packet(packet_data: dict) -> dict:
     """
     패킷 데이터를 AI로 분석합니다.
@@ -127,13 +134,13 @@ def analyze_packet(packet_data: dict) -> dict:
     if _client is None:
         return _error_response("OpenAI 클라이언트가 초기화되지 않았습니다. API 키를 확인하세요.")
 
-
+    # ── 프롬프트 구성 ──────────────────────────────────────────
     direction_kr = {
         "INBOUND":  "수신 (외부 → 내부)",
         "OUTBOUND": "송신 (내부 → 외부)",
     }.get(packet_data.get("direction", ""), "알 수 없음")
 
-
+    # ── IP 정보 조회 ───────────────────────────────────────────
     src_ip = packet_data.get('src', '?')
     dst_ip = packet_data.get('dst', '?')
     src_info = _get_ip_info(src_ip)
@@ -164,10 +171,10 @@ def analyze_packet(packet_data: dict) -> dict:
 }}
 """
 
-
+    # 로컬 LLM(LM Studio·Ollama 등)은 response_format 을 지원하지 않을 수 있음
     is_local = bool(_base_url)
 
-
+    # Reasoning 모델(qwen3, deepseek-r1 등) thinking 단계 비활성화
     disable_thinking = _ai_cfg.get("disable_thinking", True)
     if isinstance(disable_thinking, str):
         disable_thinking = disable_thinking.lower() in ("1", "true", "yes")
@@ -185,7 +192,7 @@ def analyze_packet(packet_data: dict) -> dict:
         "max_tokens":  _max_tokens,
         "temperature": 0.2,
     }
-
+    # OpenAI Cloud 에서만 JSON 모드 강제 (로컬 LLM 은 생략)
     if not is_local:
         create_kwargs["response_format"] = {"type": "json_object"}
 
@@ -193,7 +200,7 @@ def analyze_packet(packet_data: dict) -> dict:
         response = _client.chat.completions.create(**create_kwargs)
         raw_text = response.choices[0].message.content.strip()
 
-
+        # reasoning 모델이 <think>...</think> 블록을 응답에 포함하는 경우 제거
         import re
         raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
 
@@ -220,7 +227,7 @@ def analyze_packet(packet_data: dict) -> dict:
 
     except Exception as e:
         err_str = str(e)
-
+        # 타임아웃 여부 판별 (openai / httpx 모두 처리)
         if any(kw in err_str.lower() for kw in ("timeout", "timed out", "read timeout")):
             logger.error("AI API 타임아웃 (%ss 초과): %s", _timeout, e)
             return _error_response(
@@ -237,7 +244,7 @@ def get_status() -> dict:
     base_url = str(_ai_cfg.get("base_url", "")).strip()
     model    = str(_ai_cfg.get("model", "gpt-4o-mini"))
 
-
+    # 백엔드 종류 자동 판별
     if not base_url:
         backend = "OpenAI Cloud"
     elif "1234" in base_url:
@@ -256,13 +263,17 @@ def get_status() -> dict:
     }
 
 
-
+# ──────────────────────────────────────────────────────────────
+# config.json 로더 (외부 모듈용)
+# ──────────────────────────────────────────────────────────────
 def get_config() -> dict:
     """다른 모듈에서 config.json 값을 참조할 때 사용합니다."""
     return _config
 
 
-
+# ──────────────────────────────────────────────────────────────
+# 내부 헬퍼
+# ──────────────────────────────────────────────────────────────
 def _parse_json_safe(text: str) -> dict:
     """
     LLM 응답에서 JSON 블록을 추출합니다.

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetVisor AI - 실시간 네트워크 모니터</title>
+    <title>AI Packet Monitor - AI 패킷 모니터</title>
 
     <!-- 외부 라이브러리 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -99,10 +99,12 @@
             transition: all 0.25s;
             user-select: none;
         }
+
         .theme-toggle:hover {
             border-color: var(--accent-blue);
             color: var(--text-primary);
         }
+
         .theme-toggle-track {
             width: 38px;
             height: 20px;
@@ -112,6 +114,7 @@
             transition: background 0.3s;
             flex-shrink: 0;
         }
+
         .theme-toggle-track::after {
             content: '';
             position: absolute;
@@ -123,9 +126,11 @@
             background: var(--text-primary);
             transition: transform 0.3s, background 0.3s;
         }
+
         [data-theme="light"] .theme-toggle-track {
             background: var(--accent-blue);
         }
+
         [data-theme="light"] .theme-toggle-track::after {
             transform: translateX(18px);
             background: #fff;
@@ -530,6 +535,7 @@
             border-top: 1px solid var(--border);
             background: var(--bg-panel);
         }
+
         .page-btn {
             background: var(--bg-card);
             border: 1px solid var(--border);
@@ -541,16 +547,19 @@
             transition: all 0.2s;
             font-family: 'JetBrains Mono', monospace;
         }
+
         .page-btn:hover {
             border-color: var(--accent-blue);
             color: #fff;
         }
+
         .page-btn.active {
             background: var(--accent-blue);
             color: #fff;
             border-color: var(--accent-blue);
             font-weight: 600;
         }
+
         .page-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -601,7 +610,9 @@
             align-items: center;
             justify-content: center;
         }
-        .row-checkbox, #selectAllCheckbox {
+
+        .row-checkbox,
+        #selectAllCheckbox {
             width: 14px;
             height: 14px;
             cursor: pointer;
@@ -1062,8 +1073,8 @@
         <div class="sidebar-logo">
             <div class="logo-icon">🛰</div>
             <div>
-                <h1>NetVisor</h1>
-                <span>AI MONITOR</span>
+                <h1>*Project Name*</h1>
+                <span>AI Packet Monitor</span>
             </div>
         </div>
 
@@ -1180,7 +1191,9 @@
             <input type="text" id="filterMaxSize" placeholder="Max Size" style="width: 80px;">
             <button id="applyFilterBtn" class="filter-btn primary">적용</button>
             <button id="resetFilterBtn" class="filter-btn">초기화</button>
-            <button id="deleteSelectedBtn" class="filter-btn" style="color: var(--accent-red); border-color: rgba(255, 107, 107, 0.4); display: none; margin-left: 10px;">🗑️ 선택 삭제</button>
+            <button id="deleteSelectedBtn" class="filter-btn"
+                style="color: var(--accent-red); border-color: rgba(255, 107, 107, 0.4); display: none; margin-left: 10px;">🗑️
+                선택 삭제</button>
         </div>
 
         <!-- 트래픽 차트 -->
@@ -1225,9 +1238,9 @@
                     </div>
                 </div>
             </div>
-            </div>
-            <!-- 페이징 렌더링 영역 -->
-            <div class="pagination-wrap" id="paginationWrap" style="display: none;"></div>
+        </div>
+        <!-- 페이징 렌더링 영역 -->
+        <div class="pagination-wrap" id="paginationWrap" style="display: none;"></div>
         </div>
 
     </main>
@@ -1457,13 +1470,13 @@
                     alert('삭제할 패킷을 선택해주세요.');
                     return;
                 }
-                
+
                 if (!confirm(`선택한 ${checkedBoxes.length}개의 패킷을 영구 삭제하시겠습니까?`)) {
                     return;
                 }
 
                 const ids = Array.from(checkedBoxes).map(cb => parseInt(cb.value, 10));
-                
+
                 try {
                     const res = await fetch('/api/delete-packets', {
                         method: 'POST',
@@ -1528,12 +1541,12 @@
                 // ARCHIVE 모드
                 const archiveMaxPacketsSelect = document.getElementById('archiveMaxPacketsSelect');
                 const limit = parseInt(archiveMaxPacketsSelect ? archiveMaxPacketsSelect.value : "200", 10);
-                
+
                 filterObj.start_time = document.getElementById('filterStart').value.replace('T', ' ');
                 filterObj.end_time = document.getElementById('filterEnd').value.replace('T', ' ');
                 filterObj.limit = limit;
                 filterObj.page = currentPage;
-                
+
                 packetList.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><div>조회 중...</div></div>';
                 try {
                     const endpoint = currentMode === 'HIGHLIGHT' ? '/api/highlight-history' : '/api/history';
@@ -1578,7 +1591,7 @@
                         });
                         packetList.appendChild(row);
                     });
-                    
+
                     renderPagination(result.total, limit);
                 } catch (e) {
                     packetList.innerHTML = '<div class="empty-state"><div>오류 발생</div></div>';
@@ -1590,16 +1603,16 @@
         function renderPagination(total, limit) {
             const paginationWrap = document.getElementById('paginationWrap');
             if (!paginationWrap) return;
-            
+
             const totalPages = Math.ceil(total / limit);
             if (totalPages <= 1) {
                 paginationWrap.style.display = 'none';
                 return;
             }
-            
+
             paginationWrap.style.display = 'flex';
             paginationWrap.innerHTML = '';
-            
+
             const createBtn = (text, page, disabled = false, active = false) => {
                 const btn = document.createElement('button');
                 btn.className = 'page-btn';
@@ -1612,22 +1625,22 @@
                 });
                 return btn;
             };
-            
+
             // Prev
             paginationWrap.appendChild(createBtn('<<', 1, currentPage === 1));
             paginationWrap.appendChild(createBtn('<', currentPage - 1, currentPage === 1));
-            
+
             // Pages (10개 노출)
             let startPage = Math.max(1, currentPage - 5);
             let endPage = Math.min(totalPages, startPage + 9);
             if (endPage - startPage < 9) {
                 startPage = Math.max(1, endPage - 9);
             }
-            
+
             for (let i = startPage; i <= endPage; i++) {
                 paginationWrap.appendChild(createBtn(i, i, false, i === currentPage));
             }
-            
+
             // Next
             paginationWrap.appendChild(createBtn('>', currentPage + 1, currentPage === totalPages));
             paginationWrap.appendChild(createBtn('>>', totalPages, currentPage === totalPages));
@@ -1642,7 +1655,7 @@
             currentPage = 1;
             sendFilter();
         });
-        
+
         resetFilterBtn.addEventListener('click', () => {
             document.getElementById('filterIp').value = '';
             document.getElementById('filterPort').value = '';
@@ -2074,7 +2087,7 @@
                 min_size: document.getElementById('ruleMinSize').value.trim(),
                 max_size: document.getElementById('ruleMaxSize').value.trim()
             };
-            
+
             const isEmpty = !ruleObj.ip && !ruleObj.port && !ruleObj.proto && !ruleObj.dir && !ruleObj.min_size && !ruleObj.max_size;
             if (isEmpty) {
                 alert('최소 한 가지 이상의 조건을 지정해주세요.');
