@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import threading
-from ai_service import analyze_packet, get_status
+from ai_service import analyze_packet, get_status, get_config
 from database import start_db_writer, query_history, start_highlight_db_writer, query_highlight_history, delete_history_packets, delete_highlight_packets
 
 # sniffer 모듈에서 기능 임포트
@@ -154,9 +154,15 @@ def api_ai_status():
 
 
 if __name__ == '__main__':
+    # config.json 에서 서버 설정 로드
+    _cfg = get_config().get("server", {})
+    _host = _cfg.get("host", "0.0.0.0")
+    _port = int(_cfg.get("port", 25565))
+
     # 패킷 캡쳐를 별도 스레드에서 실행
     sniff_thread = threading.Thread(target=start_sniffing, daemon=True)
     sniff_thread.start()
 
     # Flask 서버 실행
-    socketio.run(app, host='0.0.0.0', port=25565, debug=True, allow_unsafe_werkzeug=True)
+    print(f"🚀 NetVisor 서버 시작: http://{_host}:{_port}")
+    socketio.run(app, host=_host, port=_port, debug=True, allow_unsafe_werkzeug=True)

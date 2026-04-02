@@ -3,30 +3,43 @@ ai_service.py
 ─────────────
 네트워크 패킷 데이터를 AI API로 분석하는 서비스 모듈.
 
-지원하는 백엔드 (.env 설정만으로 전환 가능):
-  ① OpenAI Cloud  : OPENAI_API_KEY=sk-...
-  ② LM Studio     : OPENAI_BASE_URL=http://localhost:1234/v1  OPENAI_API_KEY=lm-studio
-  ③ Ollama        : OPENAI_BASE_URL=http://localhost:11434/v1  OPENAI_API_KEY=ollama
-  ④ 기타 OpenAI 호환 서버: OPENAI_BASE_URL=http://...
+지원하는 백엔드 (config.json 설정으로 전환 가능):
+  ① OpenAI Cloud  : api_key: "sk-..."
+  ② LM Studio     : base_url: "http://localhost:1234/v1",  api_key: "lm-studio"
+  ③ Ollama        : base_url: "http://localhost:11434/v1", api_key: "ollama"
+  ④ 기타 OpenAI 호환 서버
 
 필요 패키지:
-  pip install openai python-dotenv
+  pip install openai
 """
 
-import os
 import json
 import logging
 import urllib.request
 import ipaddress
 from pathlib import Path
-from dotenv import load_dotenv
-
-# .env 파일 로드 (이 파일의 위치 기준으로 절대 경로를 사용 → PyCharm·터미널 모두 동작)
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-# ─── IP 정보 조회 헬퍼 ─────────────────────────────────────────
+
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+
+def _load_config() -> dict:
+    """config.json 파일을 읽어 딕셔너리로 반환합니다."""
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning("config.json 파일을 찾을 수 없습니다. 기본값을 사용합니다.")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error("config.json 파싱 오류: %s. 기본값을 사용합니다.", e)
+        return {}
+
+_config = _load_config()
+_ai_cfg = _config.get("ai", {})
+
+
 def _get_ip_info(ip_str: str) -> str:
     """IP의 국가 및 조직 정보를 가져옵니다 (ip-api.com 활용)"""
     if not ip_str or ip_str == '?':
@@ -48,26 +61,23 @@ def _get_ip_info(ip_str: str) -> str:
         pass
     return "조회 불가"
 
-# ──────────────────────────────────────────────────────────────
-# OpenAI 호환 클라이언트 초기화
-# base_url 이 설정되면 LM Studio / Ollama 등 로컬 LLM 사용 가능
-# ──────────────────────────────────────────────────────────────
+
 try:
     from openai import OpenAI
 
-    _api_key  = os.getenv("OPENAI_API_KEY",  "")
-    _base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    _timeout  = float(os.getenv("OPENAI_TIMEOUT", "30"))   # 기본 30초
+    _api_key  = str(_ai_cfg.get("api_key", ""))
+    _base_url = str(_ai_cfg.get("base_url", "")).strip() or None
+    _timeout  = float(_ai_cfg.get("timeout", 30))
 
     if not _api_key:
         logger.warning(
-            "OPENAI_API_KEY 가 설정되지 않았습니다. "
+            "config.json 에 ai.api_key 가 설정되지 않았습니다. "
             "LM Studio·Ollama 사용 시에는 임의의 값(예: 'lm-studio')을 넣으세요."
         )
 
     _client_kwargs = {
         "api_key": _api_key or "not-set",
-        "timeout": _timeout,          # ← 전역 타임아웃
+        "timeout": _timeout,
     }
     if _base_url:
         _client_kwargs["base_url"] = _base_url
@@ -82,9 +92,7 @@ except ImportError:
     _client = None
 
 
-# ──────────────────────────────────────────────────────────────
-# 시스템 프롬프트
-# ──────────────────────────────────────────────────────────────
+
 _SYSTEM_PROMPT = (
     "당신은 최고 수준의 네트워크 보안 분석가입니다. "
     "사용자가 제공하는 네트워크 패킷 정보를 바탕으로 "
@@ -93,9 +101,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-# ──────────────────────────────────────────────────────────────
-# 핵심 분석 함수
-# ──────────────────────────────────────────────────────────────
+
 def analyze_packet(packet_data: dict) -> dict:
     """
     패킷 데이터를 AI로 분석합니다.
@@ -121,13 +127,13 @@ def analyze_packet(packet_data: dict) -> dict:
     if _client is None:
         return _error_response("OpenAI 클라이언트가 초기화되지 않았습니다. API 키를 확인하세요.")
 
-    # ── 프롬프트 구성 ──────────────────────────────────────────
+
     direction_kr = {
         "INBOUND":  "수신 (외부 → 내부)",
         "OUTBOUND": "송신 (내부 → 외부)",
     }.get(packet_data.get("direction", ""), "알 수 없음")
 
-    # ── IP 정보 조회 ───────────────────────────────────────────
+
     src_ip = packet_data.get('src', '?')
     dst_ip = packet_data.get('dst', '?')
     src_info = _get_ip_info(src_ip)
@@ -140,7 +146,7 @@ def analyze_packet(packet_data: dict) -> dict:
 ## 분석 대상 패킷
 
 | 항목 | 값 |
-|------|----|
+|------|------|
 | 번호 | #{packet_data.get('no', '?')} |
 | 출발지 IP | {src_display} |
 | 목적지 IP | {dst_display} |
@@ -158,24 +164,28 @@ def analyze_packet(packet_data: dict) -> dict:
 }}
 """
 
-    # 로컬 LLM(LM Studio·Ollama 등)은 response_format 을 지원하지 않을 수 있음
+
     is_local = bool(_base_url)
 
-    # Reasoning 모델(qwen3, deepseek-r1 등) thinking 단계 비활성화
-    # .env 에서  DISABLE_THINKING=true  로 설정하면 /no_think 태그를 추가
-    disable_thinking = os.getenv("DISABLE_THINKING", "true").lower() in ("1", "true", "yes")
+
+    disable_thinking = _ai_cfg.get("disable_thinking", True)
+    if isinstance(disable_thinking, str):
+        disable_thinking = disable_thinking.lower() in ("1", "true", "yes")
     effective_prompt = ("/no_think\n" + user_prompt) if (is_local and disable_thinking) else user_prompt
 
+    _model = str(_ai_cfg.get("model", "gpt-4o-mini"))
+    _max_tokens = int(_ai_cfg.get("max_tokens", 600))
+
     create_kwargs = {
-        "model":       os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "model":       _model,
         "messages":    [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": effective_prompt},
         ],
-        "max_tokens":  int(os.getenv("OPENAI_MAX_TOKENS", "600")),
+        "max_tokens":  _max_tokens,
         "temperature": 0.2,
     }
-    # OpenAI Cloud 에서만 JSON 모드 강제 (로컬 LLM 은 생략)
+
     if not is_local:
         create_kwargs["response_format"] = {"type": "json_object"}
 
@@ -183,7 +193,7 @@ def analyze_packet(packet_data: dict) -> dict:
         response = _client.chat.completions.create(**create_kwargs)
         raw_text = response.choices[0].message.content.strip()
 
-        # reasoning 모델이 <think>...</think> 블록을 응답에 포함하는 경우 제거
+
         import re
         raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
 
@@ -210,13 +220,12 @@ def analyze_packet(packet_data: dict) -> dict:
 
     except Exception as e:
         err_str = str(e)
-        # 타임아웃 여부 판별 (openai / httpx 모두 처리)
+
         if any(kw in err_str.lower() for kw in ("timeout", "timed out", "read timeout")):
-            timeout_val = os.getenv("OPENAI_TIMEOUT", "30")
-            logger.error("AI API 타임아웃 (%ss 초과): %s", timeout_val, e)
+            logger.error("AI API 타임아웃 (%ss 초과): %s", _timeout, e)
             return _error_response(
-                f"⏱ AI 응답 타임아웃 ({timeout_val}초 초과).\n"
-                "더 작은 모델을 사용하거나 .env 에서 OPENAI_TIMEOUT 값을 늘려보세요."
+                f"⏱ AI 응답 타임아웃 ({int(_timeout)}초 초과).\n"
+                "더 작은 모델을 사용하거나 config.json 에서 ai.timeout 값을 늘려보세요."
             )
         logger.error("AI API 호출 실패: %s", e)
         return _error_response(err_str)
@@ -224,11 +233,11 @@ def analyze_packet(packet_data: dict) -> dict:
 
 def get_status() -> dict:
     """API 키 및 백엔드 설정 상태를 반환합니다."""
-    api_key  = os.getenv("OPENAI_API_KEY",  "")
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip()
-    model    = os.getenv("OPENAI_MODEL",    "gpt-4o-mini")
+    api_key  = str(_ai_cfg.get("api_key", ""))
+    base_url = str(_ai_cfg.get("base_url", "")).strip()
+    model    = str(_ai_cfg.get("model", "gpt-4o-mini"))
 
-    # 백엔드 종류 자동 판별
+
     if not base_url:
         backend = "OpenAI Cloud"
     elif "1234" in base_url:
@@ -247,9 +256,13 @@ def get_status() -> dict:
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 내부 헬퍼
-# ──────────────────────────────────────────────────────────────
+
+def get_config() -> dict:
+    """다른 모듈에서 config.json 값을 참조할 때 사용합니다."""
+    return _config
+
+
+
 def _parse_json_safe(text: str) -> dict:
     """
     LLM 응답에서 JSON 블록을 추출합니다.

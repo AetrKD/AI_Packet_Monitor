@@ -1,0 +1,14 @@
+{
+    "server": {
+        "port": 25565,
+        "host": "0.0.0.0"
+    },
+    "ai": {
+        "api_key": "lm-studio",
+        "base_url": "http://localhost:1234/v1",
+        "model": "google/gemma-3-4b",
+        "max_tokens": 600,
+        "timeout": 30,
+        "disable_thinking": true
+    }
+}
