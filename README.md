@@ -6,10 +6,6 @@
 
 ## 상세
 언어 : Python, JavaScript
-
 프레임워크 : Flask
-
 패킷 처리 : Scapy, Npcap
-
 프론트 : HTML, CSS
-
