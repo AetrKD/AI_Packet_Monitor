@@ -35,6 +35,14 @@ Flask 웹 프레임워크를 이용하여 만들었습니다. 파이썬 최고!
 - 패킷 처리 : Scapy, Npcap
 - 프론트 : HTML, CSS
 
+## 설정
+- host : 서버 실행 주소 (기본: 0.0.0.0)
+- port : 서버 실행 포트 (기본: 25565)
+- api_key : OpenAI 활용 시 sk-... 입력, 로컬 AI(LM Studio/Ollama)는 아무 값이나 입력 가능 
+- base_url : OpenAI Cloud는 빈 문자열, LM Studio는 :1234/v1, Ollama는 :11434/v1  
+- model : 사용할 AI 모델 명칭 
+- disable_thinking : Reasoning 모델(DeepSeek-R1 등)의 추론 과정 생략 여부
+
 ## 잡담
 대학교 Lab-Scale 과목에서 진행하는 프로젝트입니다. 자유주제였지만 평소 네트워크에 관심이 꽤 있었기도 하고 생산성 있는 프로그램을 만들어보고 싶었기에 도전해봤습니다.
 

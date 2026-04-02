@@ -1,14 +1,15 @@
 {
     "server": {
-        "host": "0.0.0.0", //서버 실행 주소 (기본: 0.0.0.0)
-        "port": 25565, //서버 실행 포트 (기본: 25565)
+        "host": "0.0.0.0",
+
+        "port": 25565,
     },
     "ai": {
-        "api_key": "lm-studio", //OpenAI 활용 시 sk-... 입력, 로컬 AI(LM Studio/Ollama)는 아무 값이나 입력 가능
-        "base_url": "http://localhost:1234/v1", //OpenAI Cloud는 빈 문자열, LM Studio는 :1234/v1, Ollama는 :11434/v1
-        "model": "google/gemma-3-4b", //사용할 AI 모델 명칭
+        "api_key": "lm-studio",
+        "base_url": "http://localhost:1234/v1",
+        "model": "google/gemma-3-4b",
         "max_tokens": 600,
         "timeout": 30,
-        "disable_thinking": true, //Reasoning 모델(DeepSeek-R1 등)의 추론 과정 생략 여부
+        "disable_thinking": true,
     }
 }
