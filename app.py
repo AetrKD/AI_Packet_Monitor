@@ -164,5 +164,5 @@ if __name__ == '__main__':
     sniff_thread.start()
 
     # Flask 서버 실행
-    print(f"🚀 NetVisor 서버 시작: http://{_host}:{_port}")
-    socketio.run(app, host=_host, port=_port, debug=True, allow_unsafe_werkzeug=True)
+    print(f"서버 시작: http://{_host}:{_port}")
+    socketio.run(app, host=_host, port=_port, debug=True, allow_unsafe_werkzeug=True)
