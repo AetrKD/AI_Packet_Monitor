@@ -36,8 +36,47 @@ def _load_config() -> dict:
         logger.error("config.json 파싱 오류: %s. 기본값을 사용합니다.", e)
         return {}
 
-_config = _load_config()
-_ai_cfg = _config.get("ai", {})
+_config = {}
+_ai_cfg = {}
+_client = None
+
+def reload_config():
+    """config.json을 다시 읽고 AI 클라이언트를 핫-리로딩합니다."""
+    global _config, _ai_cfg, _client
+    _config = _load_config()
+    _ai_cfg = _config.get("ai", {})
+
+    try:
+        from openai import OpenAI
+
+        api_key  = str(_ai_cfg.get("api_key", ""))
+        base_url = str(_ai_cfg.get("base_url", "")).strip() or None
+        timeout  = float(_ai_cfg.get("timeout", 30))
+
+        if not api_key:
+            logger.warning(
+                "config.json 에 ai.api_key 가 설정되지 않았습니다. "
+                "LM Studio·Ollama 사용 시에는 임의의 값(예: 'lm-studio')을 넣으세요."
+            )
+
+        client_kwargs = {
+            "api_key": api_key or "not-set",
+            "timeout": timeout,
+        }
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            logger.info("AI 백엔드: %s (로컬/커스텀)  타임아웃: %.0fs", base_url, timeout)
+        else:
+            logger.info("AI 백엔드: OpenAI Cloud  타임아웃: %.0fs", timeout)
+
+        _client = OpenAI(**client_kwargs) if api_key else None
+
+    except ImportError:
+        logger.error("openai 패키지가 설치되지 않았습니다. `pip install openai` 를 실행하세요.")
+        _client = None
+
+# 모듈 로드 시 최초 1회 실행
+reload_config()
 
 # ─── IP 정보 조회 헬퍼 ─────────────────────────────────────────
 def _get_ip_info(ip_str: str) -> str:
@@ -45,13 +84,16 @@ def _get_ip_info(ip_str: str) -> str:
     if not ip_str or ip_str == '?':
         return ""
     try:
+        import ipaddress
         ip_obj = ipaddress.ip_address(ip_str)
         if ip_obj.is_private or ip_obj.is_loopback:
             return "내부 네트워크 (사설 IP)"
             
         url = f"http://ip-api.com/json/{ip_str}?lang=ko"
+        import urllib.request
         req = urllib.request.Request(url, headers={'User-Agent': 'NetVisor/1.0'})
         with urllib.request.urlopen(req, timeout=1.5) as response:
+            import json
             data = json.loads(response.read().decode())
             if data.get('status') == 'success':
                 country = data.get('country', '')
@@ -60,39 +102,6 @@ def _get_ip_info(ip_str: str) -> str:
     except Exception:
         pass
     return "조회 불가"
-
-# ──────────────────────────────────────────────────────────────
-# OpenAI 호환 클라이언트 초기화
-# base_url 이 설정되면 LM Studio / Ollama 등 로컬 LLM 사용 가능
-# ──────────────────────────────────────────────────────────────
-try:
-    from openai import OpenAI
-
-    _api_key  = str(_ai_cfg.get("api_key", ""))
-    _base_url = str(_ai_cfg.get("base_url", "")).strip() or None
-    _timeout  = float(_ai_cfg.get("timeout", 30))
-
-    if not _api_key:
-        logger.warning(
-            "config.json 에 ai.api_key 가 설정되지 않았습니다. "
-            "LM Studio·Ollama 사용 시에는 임의의 값(예: 'lm-studio')을 넣으세요."
-        )
-
-    _client_kwargs = {
-        "api_key": _api_key or "not-set",
-        "timeout": _timeout,
-    }
-    if _base_url:
-        _client_kwargs["base_url"] = _base_url
-        logger.info("AI 백엔드: %s (로컬/커스텀)  타임아웃: %.0fs", _base_url, _timeout)
-    else:
-        logger.info("AI 백엔드: OpenAI Cloud  타임아웃: %.0fs", _timeout)
-
-    _client = OpenAI(**_client_kwargs) if _api_key else None
-
-except ImportError:
-    logger.error("openai 패키지가 설치되지 않았습니다. `pip install openai` 를 실행하세요.")
-    _client = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -172,7 +181,8 @@ def analyze_packet(packet_data: dict) -> dict:
 """
 
     # 로컬 LLM(LM Studio·Ollama 등)은 response_format 을 지원하지 않을 수 있음
-    is_local = bool(_base_url)
+    base_url = str(_ai_cfg.get("base_url", "")).strip() or None
+    is_local = bool(base_url)
 
     # Reasoning 모델(qwen3, deepseek-r1 등) thinking 단계 비활성화
     disable_thinking = _ai_cfg.get("disable_thinking", True)
@@ -227,11 +237,12 @@ def analyze_packet(packet_data: dict) -> dict:
 
     except Exception as e:
         err_str = str(e)
+        timeout_val = float(_ai_cfg.get("timeout", 30))
         # 타임아웃 여부 판별 (openai / httpx 모두 처리)
         if any(kw in err_str.lower() for kw in ("timeout", "timed out", "read timeout")):
-            logger.error("AI API 타임아웃 (%ss 초과): %s", _timeout, e)
+            logger.error("AI API 타임아웃 (%ss 초과): %s", timeout_val, e)
             return _error_response(
-                f"⏱ AI 응답 타임아웃 ({int(_timeout)}초 초과).\n"
+                f"⏱ AI 응답 타임아웃 ({int(timeout_val)}초 초과).\n"
                 "더 작은 모델을 사용하거나 config.json 에서 ai.timeout 값을 늘려보세요."
             )
         logger.error("AI API 호출 실패: %s", e)
@@ -251,6 +262,8 @@ def get_status() -> dict:
         backend = "LM Studio"
     elif "11434" in base_url or "ollama" in base_url.lower():
         backend = "Ollama"
+    elif "anythingllm" in base_url.lower() or "3001" in base_url:
+        backend = "AnythingLLM"
     else:
         backend = "Custom"
 

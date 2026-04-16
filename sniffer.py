@@ -1,14 +1,14 @@
 import socket as sock
 from scapy.all import sniff, IP, TCP, UDP
 from datetime import datetime
-from database import save_packet_async, save_highlight_packet_async
+from database import save_packet_async
 
 # ─── 상태 변수 ──────────────────────────────────
 packet_count = 0
 is_paused = False
 is_saving = False
 current_filter = {}
-highlight_rules = []
+packet_rules = [] # [{'action': 'IGNORE'|'HIGHLIGHT', 'ip': ...}]
 
 # 이벤트 전송 콜백 함수 (app.py의 socketio.emit 연결용)
 _emit_callback = None
@@ -36,10 +36,10 @@ def set_filter(filter_dict: dict):
     global current_filter
     current_filter = filter_dict
 
-def set_highlight_rules(rules: list):
-    """강조 표시 및 자동 저장 다중 규칙을 설정합니다."""
-    global highlight_rules
-    highlight_rules = rules
+def set_packet_rules(rules: list):
+    """지정된 패킷을 무시 또는 강조하는 규칙을 설정합니다."""
+    global packet_rules
+    packet_rules = rules
 
 
 def get_local_ips():
@@ -94,7 +94,7 @@ def check_filter_match(f_dict: dict, src: str, dst: str, sport, dport, proto_nam
     return True
 
 def packet_callback(packet):
-    global packet_count, is_paused, is_saving, current_filter, highlight_rules
+    global packet_count, is_paused, is_saving, current_filter, packet_rules
     
     # 1. 일시정지 체크
     if is_paused:
@@ -131,16 +131,21 @@ def packet_callback(packet):
             return
         # ================================
 
+        # ====== 패킷 규칙 검사 (무시/강조) ======
+        is_highlight = False
+        if packet_rules:
+            for rule in packet_rules:
+                if check_filter_match(rule, src, dst, sport, dport, proto_name, direction, pkt_len):
+                    action = rule.get('action', 'HIGHLIGHT')
+                    if action == 'IGNORE':
+                        return # 조용히 폐기
+                    elif action == 'HIGHLIGHT':
+                        is_highlight = True
+                        # 계속 진행 (다른 규칙에 IGNORE가 있을 수 있으나 단순성을 위해 break)
+                        break
+
         # 필터 통과시만 카운트 증가
         packet_count += 1
-        
-        # ====== 강조 조건 검사 (여러 규칙 중 하나라도 맞으면 True = OR 조건) ======
-        is_highlight = False
-        if highlight_rules:
-            for rule in highlight_rules:
-                if check_filter_match(rule, src, dst, sport, dport, proto_name, direction, pkt_len):
-                    is_highlight = True
-                    break
 
         # ==== 시간 생성 (YYYY-MM-DD HH:MM:SS) ====
         time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -159,13 +164,9 @@ def packet_callback(packet):
             "highlight": is_highlight
         }
         
-        # DB 저장 큐 적재 (일반 저장 버튼 활성화 시)
-        if is_saving:
-            save_packet_async(packet_data, time_str)
-            
-        # 강조 조건 부합 시 무조건 별도 DB 저장
-        if is_highlight:
-            save_highlight_packet_async(packet_data, time_str)
+        # DB 저장 조건이 하나라도 만족하면 큐에 적재
+        if is_saving or is_highlight:
+            save_packet_async(packet_data, time_str, is_saved=is_saving, is_highlighted=is_highlight)
         
         # app.py로 데이터 전송 (등록된 콜백이 있다면)
         if _emit_callback:
@@ -198,8 +199,25 @@ def start_sniffing():
 
     # ── 실제 패킷 캡처 시작 ───
     try:
-        print("[INFO] 패킷 캡처 시작...")
-        sniff(prn=packet_callback, store=0)
+        import json
+        from pathlib import Path
+        config_path = Path(__file__).parent / "config.json"
+        target_iface = None
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                target_iface = cfg.get("server", {}).get("iface")
+                if not target_iface or target_iface == "all":
+                    target_iface = None
+        except Exception:
+            pass
+
+        if target_iface:
+            print(f"[INFO] '{target_iface}' 어댑터에서 패킷 캡처 시작...")
+            sniff(iface=target_iface, prn=packet_callback, store=0)
+        else:
+            print("[INFO] 전체/기본 어댑터에서 패킷 캡처 시작...")
+            sniff(prn=packet_callback, store=0)
     except PermissionError as e:
         print("=" * 60)
         print("[ERROR] 권한 오류 - PyCharm을 관리자 권한으로 실행하세요.")

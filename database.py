@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 
 DB_FILE = Path(__file__).parent / "packets.db"
-HIGHLIGHT_DB_FILE = Path(__file__).parent / "highlighted_packets.db"
 
 class DBManager:
     def __init__(self, db_path: Path):
@@ -28,9 +27,35 @@ class DBManager:
                 size INTEGER,
                 direction TEXT,
                 summary TEXT,
-                raw_hex TEXT
+                raw_hex TEXT,
+                is_saved INTEGER DEFAULT 0,
+                is_highlighted INTEGER DEFAULT 0
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ip_aliases (
+                ip TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS packet_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL DEFAULT 'HIGHLIGHT',
+                ip TEXT,
+                port TEXT,
+                proto TEXT,
+                direction TEXT,
+                min_size TEXT,
+                max_size TEXT,
+                description TEXT DEFAULT ''
+            )
+        """)
+        # 기존 DB 마이그레이션: description 컬럼이 없으면 추가
+        try:
+            cursor.execute("ALTER TABLE packet_rules ADD COLUMN description TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재
         conn.commit()
         conn.close()
 
@@ -43,7 +68,6 @@ class DBManager:
         while self.running or not self.packet_queue.empty():
             items = []
             try:
-                # 타임아웃을 두어 주기적으로 self.running 체크
                 items.append(self.packet_queue.get(timeout=1.0))
                 # 큐에 쌓인 것들 최대 batch_size만큼 더 가져오기 (성능 향상)
                 while len(items) < batch_size and not self.packet_queue.empty():
@@ -53,12 +77,11 @@ class DBManager:
                 
             if items:
                 cursor.executemany("""
-                    INSERT INTO packets (timestamp, src, dst, proto, size, direction, summary, raw_hex)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO packets (timestamp, src, dst, proto, size, direction, summary, raw_hex, is_saved, is_highlighted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, items)
                 conn.commit()
                 
-                # task_done 호출
                 for _ in items:
                     self.packet_queue.task_done()
                     
@@ -74,7 +97,7 @@ class DBManager:
         self.db_thread = threading.Thread(target=self._db_worker, daemon=True)
         self.db_thread.start()
 
-    def save_packet_async(self, packet_data: dict, time_str: str):
+    def save_packet_async(self, packet_data: dict, time_str: str, is_saved: bool, is_highlighted: bool):
         """엔진에서 호출하여 패킷을 큐에 적재합니다."""
         if not self.running:
             return
@@ -87,17 +110,25 @@ class DBManager:
             packet_data.get("len", 0),
             packet_data.get("direction"),
             packet_data.get("summary"),
-            packet_data.get("raw")
+            packet_data.get("raw"),
+            1 if is_saved else 0,
+            1 if is_highlighted else 0
         )
         self.packet_queue.put(row)
 
-    def query_history(self, filters: dict):
+    def query_history(self, filters: dict, db_type: str = 'ARCHIVE'):
         """저장된 패킷 이력과 총 개수를 조회합니다."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         where_clause = " FROM packets WHERE 1=1"
+        
+        if db_type == 'HIGHLIGHT':
+            where_clause += " AND is_highlighted = 1"
+        else:
+            where_clause += " AND is_saved = 1"
+            
         params = []
         
         f_ip = filters.get("ip", "").strip()
@@ -168,47 +199,130 @@ class DBManager:
         conn.close()
         return {"data": results, "total": total_count}
 
-    def delete_packets(self, ids: list[int]) -> int:
-        """지정된 id 목록에 해당하는 패킷들을 삭제합니다."""
+    def delete_packets(self, ids: list[int], db_type: str = 'ARCHIVE') -> int:
+        """지정된 id 목록에 해당하는 패킷들을 논리 삭제합니다."""
         if not ids:
             return 0
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         placeholders = ','.join(['?'] * len(ids))
-        cursor.execute(f"DELETE FROM packets WHERE id IN ({placeholders})", ids)
-        deleted_count = cursor.rowcount
+        
+        if db_type == 'HIGHLIGHT':
+            cursor.execute(f"UPDATE packets SET is_highlighted = 0 WHERE id IN ({placeholders})", ids)
+        else:
+            cursor.execute(f"UPDATE packets SET is_saved = 0 WHERE id IN ({placeholders})", ids)
+            
+        # 둘 다 0이 되면 완전 삭제
+        cursor.execute("DELETE FROM packets WHERE is_saved = 0 AND is_highlighted = 0")
+        
         conn.commit()
         conn.close()
-        return deleted_count
+        return len(ids)
 
-# 정적 인스턴스로 호환성 유지 및 확장
+    def get_aliases(self) -> dict:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT ip, name FROM ip_aliases")
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+
+    def set_alias(self, ip: str, name: str):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO ip_aliases (ip, name) VALUES (?, ?)", (ip, name))
+        conn.commit()
+        conn.close()
+
+    def delete_alias(self, ip: str):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ip_aliases WHERE ip = ?", (ip,))
+        conn.commit()
+        conn.close()
+
+    def get_rules(self) -> list:
+        """DB에 저장된 패킷 규칙(강조/무시) 목록을 불러옵니다."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT action, ip, port, proto, direction, min_size, max_size, description FROM packet_rules ORDER BY id")
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        conn.close()
+        return [{
+            'action': row['action'],
+            'ip': row['ip'] or '',
+            'port': row['port'] or '',
+            'proto': row['proto'] or '',
+            'dir': row['direction'] or '',
+            'min_size': row['min_size'] or '',
+            'max_size': row['max_size'] or '',
+            'description': row['description'] or '',
+        } for row in rows]
+
+    def save_rules(self, rules: list):
+        """패킷 규칙 목록을 DB에 전체 덮어쓰기합니다."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM packet_rules")
+        for r in rules:
+            cursor.execute("""
+                INSERT INTO packet_rules (action, ip, port, proto, direction, min_size, max_size, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                r.get('action', 'HIGHLIGHT'),
+                r.get('ip', ''),
+                r.get('port', ''),
+                r.get('proto', ''),
+                r.get('dir', ''),
+                r.get('min_size', ''),
+                r.get('max_size', ''),
+                r.get('description', ''),
+            ))
+        conn.commit()
+        conn.close()
+
+# 전역 싱글턴 인스턴스
 main_db = DBManager(DB_FILE)
-highlight_db = DBManager(HIGHLIGHT_DB_FILE)
 
 def init_db():
     main_db.init_db()
-    highlight_db.init_db()
 
 def start_db_writer():
     main_db.start_writer()
 
-def save_packet_async(packet_data: dict, time_str: str):
-    main_db.save_packet_async(packet_data, time_str)
+def save_packet_async(packet_data: dict, time_str: str, is_saved: bool, is_highlighted: bool):
+    main_db.save_packet_async(packet_data, time_str, is_saved, is_highlighted)
 
 def query_history(filters: dict):
-    return main_db.query_history(filters)
-
-def start_highlight_db_writer():
-    highlight_db.start_writer()
-
-def save_highlight_packet_async(packet_data: dict, time_str: str):
-    highlight_db.save_packet_async(packet_data, time_str)
+    return main_db.query_history(filters, db_type='ARCHIVE')
 
 def query_highlight_history(filters: dict):
-    return highlight_db.query_history(filters)
+    return main_db.query_history(filters, db_type='HIGHLIGHT')
 
 def delete_history_packets(ids: list[int]):
-    return main_db.delete_packets(ids)
+    return main_db.delete_packets(ids, db_type='ARCHIVE')
 
 def delete_highlight_packets(ids: list[int]):
-    return highlight_db.delete_packets(ids)
+    return main_db.delete_packets(ids, db_type='HIGHLIGHT')
+
+def get_aliases():
+    return main_db.get_aliases()
+
+def set_alias(ip: str, name: str):
+    main_db.set_alias(ip, name)
+
+def delete_alias(ip: str):
+    main_db.delete_alias(ip)
+
+def get_rules():
+    return main_db.get_rules()
+
+def save_rules(rules: list):
+    main_db.save_rules(rules)
