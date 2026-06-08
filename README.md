@@ -33,7 +33,7 @@ Flask 웹 프레임워크를 이용하여 만들었습니다. 파이썬 최고!
   - Local LLM
 - 외부 접속
 
-## 상세
+## 개발 환경
 - 언어 : Python, JavaScript
 - 프레임워크 : Flask
 - 패킷 처리 : Scapy, Npcap
