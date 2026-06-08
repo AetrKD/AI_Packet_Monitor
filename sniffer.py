@@ -1,7 +1,12 @@
+import queue
 import socket as sock
 from scapy.all import sniff, IP, TCP, UDP
 from datetime import datetime
 from database import save_packet_async
+
+# 자동 AI 분석 대상 큐 (app.py의 워커가 소비)
+# maxsize=10 으로 제한하여 할당량 보호
+auto_analysis_queue: queue.Queue = queue.Queue(maxsize=10)
 
 # ─── 상태 변수 ──────────────────────────────────
 packet_count = 0
@@ -55,46 +60,53 @@ def get_local_ips():
 
 LOCAL_IPS = get_local_ips()
 
-def check_filter_match(f_dict: dict, src: str, dst: str, sport, dport, proto_name: str, direction: str, pkt_len: int) -> bool:
+def check_filter_match(f_dict: dict, src: str, dst: str, sport, dport, proto_name: str, direction: str, pkt_len: int, default_match: bool = False) -> bool:
     """주어진 패킷 정보가 특정 필터 딕셔너리 조건에 부합하는지 검사합니다."""
     if not f_dict:
-        return True
-        
-    f_ip = f_dict.get('ip')
-    if f_ip and (f_ip not in src and f_ip not in dst):
+        return default_match
+
+    f_ip    = (f_dict.get('ip')       or '').strip()
+    f_port  = (f_dict.get('port')     or '').strip()
+    f_proto = (f_dict.get('proto')    or '').strip()
+    f_dir   = (f_dict.get('dir')      or '').strip()
+    f_min   = (f_dict.get('min_size') or '').strip()
+    f_max   = (f_dict.get('max_size') or '').strip()
+
+    # 조건이 하나도 없으면 default_match 값을 따름
+    if not any([f_ip, f_port, f_proto, f_dir, f_min, f_max]):
+        return default_match
+
+    if f_ip and (f_ip != src and f_ip != dst):
         return False
-        
-    f_port = f_dict.get('port')
+
     if f_port:
         try:
             fp = int(f_port)
             if fp not in (sport, dport): return False
         except ValueError: pass
-        
-    f_proto = f_dict.get('proto')
+
     if f_proto and f_proto != proto_name:
         return False
-        
-    f_dir = f_dict.get('dir')
+
     if f_dir and f_dir != direction:
         return False
-        
-    f_min = f_dict.get('min_size')
+
     if f_min:
         try:
             if pkt_len < int(f_min): return False
         except ValueError: pass
-        
-    f_max = f_dict.get('max_size')
+
     if f_max:
         try:
             if pkt_len > int(f_max): return False
         except ValueError: pass
-        
+
     return True
 
 def packet_callback(packet):
     global packet_count, is_paused, is_saving, current_filter, packet_rules
+    
+    # print(".", end="", flush=True) # 너무 많을 수 있으니 주석 처리하거나 조건부로
     
     # 1. 일시정지 체크
     if is_paused:
@@ -127,7 +139,8 @@ def packet_callback(packet):
         pkt_len = len(packet)
 
         # ====== 캡처 필터 검사 (AND 조건) ======
-        if not check_filter_match(current_filter, src, dst, sport, dport, proto_name, direction, pkt_len):
+        # 기본 필터는 조건이 없으면 모든 패킷 통과 (default_match=True)
+        if not check_filter_match(current_filter, src, dst, sport, dport, proto_name, direction, pkt_len, default_match=True):
             return
         # ================================
 
@@ -135,13 +148,13 @@ def packet_callback(packet):
         is_highlight = False
         if packet_rules:
             for rule in packet_rules:
-                if check_filter_match(rule, src, dst, sport, dport, proto_name, direction, pkt_len):
+                # 규칙은 조건이 하나라도 있어야 매칭됨 (default_match=False)
+                if check_filter_match(rule, src, dst, sport, dport, proto_name, direction, pkt_len, default_match=False):
                     action = rule.get('action', 'HIGHLIGHT')
                     if action == 'IGNORE':
                         return # 조용히 폐기
                     elif action == 'HIGHLIGHT':
                         is_highlight = True
-                        # 계속 진행 (다른 규칙에 IGNORE가 있을 수 있으나 단순성을 위해 break)
                         break
 
         # 필터 통과시만 카운트 증가
@@ -167,7 +180,14 @@ def packet_callback(packet):
         # DB 저장 조건이 하나라도 만족하면 큐에 적재
         if is_saving or is_highlight:
             save_packet_async(packet_data, time_str, is_saved=is_saving, is_highlighted=is_highlight)
-        
+
+        # HIGHLIGHT 패킷은 자동 AI 분석 큐에도 추가 (큐가 꽉 차면 조용히 버림)
+        if is_highlight:
+            try:
+                auto_analysis_queue.put_nowait(packet_data)
+            except queue.Full:
+                pass
+
         # app.py로 데이터 전송 (등록된 콜백이 있다면)
         if _emit_callback:
             _emit_callback('new_packet', packet_data)

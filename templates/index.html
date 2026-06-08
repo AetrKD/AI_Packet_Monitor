@@ -8,7 +8,7 @@
 
     <!-- 외부 라이브러리 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
@@ -30,9 +30,37 @@
             </div>
         </div>
 
-        <div class="status-row">
-            <div class="status-dot"></div>
-            <span id="status-text">연결됨</span>
+        <div class="status-row" style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <div class="status-dot"></div>
+                <span id="status-text">연결됨</span>
+            </div>
+            <!-- 알림 벨 버튼 -->
+            <button id="alertBellBtn" title="AI 위협 알림" style="
+                background: none; border: none; cursor: pointer;
+                color: var(--text-secondary); font-size: 1rem;
+                padding: 4px 6px; border-radius: 6px;
+                position: relative; transition: color 0.2s;
+            ">🔔<span id="alertBadge" style="
+                display: none; position: absolute; top: 0; right: 0;
+                background: var(--accent-red, #ff6b6b); color: white;
+                font-size: 0.6rem; font-weight: 700;
+                border-radius: 50%; width: 14px; height: 14px;
+                line-height: 14px; text-align: center;
+            ">0</span></button>
+        </div>
+        <!-- 알림 드롭다운 패널 -->
+        <div id="alertPanel" style="
+            display: none; background: var(--bg-secondary);
+            border: 1px solid var(--border-color); border-radius: 8px;
+            margin-top: 4px; max-height: 260px; overflow-y: auto;
+            font-size: 0.78rem;
+        ">
+            <div style="padding: 8px 12px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <span>🤖 AI 위협 알림</span>
+                <button id="clearAlertsBtn" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:0.75rem;">모두 지우기</button>
+            </div>
+            <div id="alertList"><div style="padding: 16px 12px; color: var(--text-dim); text-align: center;">알림 없음</div></div>
         </div>
 
         <!-- 내비게이션 탭 -->
@@ -74,6 +102,16 @@
 
         <!-- 시스템 설정 모달 진입 / 테마 토글 -->
         <div style="margin-top: auto;">
+            <!-- 자동 AI 분석 토글 -->
+            <div id="autoAnalysisToggle" style="
+                padding: 8px 14px; border-radius: 8px; cursor: pointer;
+                font-size: 0.82rem; color: var(--text-secondary);
+                border: 1px solid var(--border-color); margin-bottom: 8px;
+                display: flex; align-items: center; justify-content: space-between;
+            ">
+                <span>🤖 자동 AI 분석</span>
+                <span id="autoAnalysisStatus" style="font-size:0.72rem; color: var(--text-dim); font-weight: 600;">OFF</span>
+            </div>
             <div class="sidebar-tab" id="menuSettingsBtn" style="padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-left: 3px solid transparent; margin-bottom: 10px;">
                 ⚙️ 시스템 / AI 설정
             </div>
@@ -113,6 +151,8 @@
                     style="color: var(--accent-blue); border-color: rgba(74, 144, 226, 0.4);">🏷️ 별명 설정</button>
                 <button id="highlightSettingsBtn" class="pause-btn"
                     style="color: var(--accent-amber); border-color: rgba(246, 166, 35, 0.4);">🎯 패킷 규칙(강조/무시)</button>
+                <!-- 선택 분석 버튼 (ARCHIVE/HIGHLIGHT 탭에서만 표시) -->
+                <button id="batchAnalyzeBtn" class="pause-btn" style="display:none; color: var(--accent-green, #3ecf8e); border-color: rgba(62,207,142,0.4);">🔍 선택 분석</button>
                 <button id="saveBtn" class="pause-btn">💾 DB 저장 (Off)</button>
                 <button id="pauseBtn" class="pause-btn">⏸ 일시정지</button>
             </div>
@@ -369,6 +409,33 @@
             <div class="modal-footer">
                 <button class="filter-btn" id="cancelRuleBtn">취소</button>
                 <button class="filter-btn primary" id="saveRuleBtn">서버에 적용</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 모달: AI 알림 상세 -->
+    <div class="modal-overlay" id="alertDetailModal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="alertDetailTitle">🤖 AI 위협 분석</h3>
+                <button class="modal-close" id="closeAlertDetailModal">×</button>
+            </div>
+            <div class="modal-body" id="alertDetailBody"></div>
+        </div>
+    </div>
+
+    <!-- 모달: 배치(일괄) AI 분석 결과 -->
+    <div class="modal-overlay" id="batchResultModal">
+        <div class="modal-content" style="max-width: 560px;">
+            <div class="modal-header">
+                <h3>🔍 선택 패킷 AI 종합 분석</h3>
+                <button class="modal-close" id="closeBatchModal">×</button>
+            </div>
+            <div class="modal-body" id="batchResultBody">
+                <div class="ai-loading" style="padding: 40px 0; text-align: center;">
+                    <div class="spinner"></div>
+                    <span>AI 분석 중...</span>
+                </div>
             </div>
         </div>
     </div>

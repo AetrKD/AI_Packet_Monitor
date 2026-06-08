@@ -146,8 +146,47 @@
             }
         });
 
-        // ── 연결 ──────────────────────────────────────────────
-        const socket = io();
+        // ── WebSocket 연결 ──────────────────────────────────
+        let socket = null;
+        const _wsHandlers = {};  // 이벤트 핸들러 맵
+
+        function connectWebSocket() {
+            const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${wsProto}//${location.host}/ws`);
+
+            socket.onopen = () => {
+                if (_wsHandlers['connect']) _wsHandlers['connect'].forEach(fn => fn());
+            };
+
+            socket.onclose = () => {
+                if (_wsHandlers['disconnect']) _wsHandlers['disconnect'].forEach(fn => fn());
+                // 자동 재연결 (3초 후)
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            socket.onerror = () => {};
+
+            socket.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    const event = msg.event;
+                    const data = msg.data;
+                    if (event && _wsHandlers[event]) {
+                        _wsHandlers[event].forEach(fn => fn(data));
+                    }
+                } catch (err) {
+                    console.error('WebSocket 메시지 파싱 오류:', err);
+                }
+            };
+        }
+
+        // socket.on 호환 헬퍼
+        function onSocket(event, handler) {
+            if (!_wsHandlers[event]) _wsHandlers[event] = [];
+            _wsHandlers[event].push(handler);
+        }
+
+        connectWebSocket();
 
         // ── 별명(Alias) 전역 캐시 ────────────────────────────────
         let ipAliases = {};
@@ -234,6 +273,9 @@
                 if (maxPacketsSelect) maxPacketsSelect.style.display = 'block';
                 if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'none';
                 if (paginationWrap) paginationWrap.style.display = 'none';
+                const batchBtn = document.getElementById('batchAnalyzeBtn');
+                if (batchBtn) batchBtn.style.display = 'none';
+                firstPacket = true; // 탭 전환 시 첫 패킷 대기 상태로 초기화
                 sendFilter();
             } else if (mode === 'ARCHIVE') {
                 tabArchive.classList.add('active');
@@ -246,6 +288,8 @@
                 if (selectAllCheckbox) selectAllCheckbox.disabled = false;
                 if (maxPacketsSelect) maxPacketsSelect.style.display = 'none';
                 if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'block';
+                const batchBtn = document.getElementById('batchAnalyzeBtn');
+                if (batchBtn) batchBtn.style.display = 'inline-block';
                 currentPage = 1;
                 sendFilter();
             } else if (mode === 'HIGHLIGHT') {
@@ -260,6 +304,8 @@
                 if (selectAllCheckbox) selectAllCheckbox.disabled = false;
                 if (maxPacketsSelect) maxPacketsSelect.style.display = 'none';
                 if (archiveMaxPacketsSelect) archiveMaxPacketsSelect.style.display = 'block';
+                const batchBtn = document.getElementById('batchAnalyzeBtn');
+                if (batchBtn) batchBtn.style.display = 'inline-block';
                 currentPage = 1;
                 sendFilter();
             }
@@ -512,11 +558,11 @@
         let firstPacket = true;   // 최초 도착 시 empty-state 제거용
 
         // ── 연결 상태 이벤트 ──────────────────────────────────
-        socket.on('disconnect', () => {
+        onSocket('disconnect', () => {
             statusText.textContent = '연결 끊김';
             document.querySelector('.status-dot').style.background = 'var(--accent-red)';
         });
-        socket.on('connect', () => {
+        onSocket('connect', () => {
             statusText.textContent = '연결됨';
             document.querySelector('.status-dot').style.background = 'var(--accent-green)';
         });
@@ -592,7 +638,17 @@
         }, INTERVAL_MS);
 
         // ── 패킷 수신 이벤트 ──────────────────────────────────
-        socket.on('new_packet', (data) => {
+        onSocket('new_packet', (data) => {
+            handleSinglePacket(data);
+        });
+
+        onSocket('new_packets', (packets) => {
+            if (Array.isArray(packets)) {
+                packets.forEach(pkt => handleSinglePacket(pkt));
+            }
+        });
+
+        function handleSinglePacket(data) {
             if (currentMode === 'ARCHIVE' || currentMode === 'HIGHLIGHT') return; // 아카이브/강조 모드일 때는 그리지 않음
 
             // 최초 패킷 도착 시 empty-state 제거
@@ -607,6 +663,7 @@
             total++;
             if (dir === 'INBOUND') { inCount++; ppsIn++; }
             else if (dir === 'OUTBOUND') { outCount++; ppsOut++; }
+            else { ppsIn++; } // OTHER도 트래픽으로 간주
 
             countTotal.textContent = total;
             countIn.textContent = inCount;
@@ -1089,3 +1146,229 @@
                 console.warn('AI 상태 확인 실패:', e);
             }
         })();
+
+        // ════════════════════════════════════════════════════════
+        // ── 패킷 데이터 저장소 (배치 분석용) ──────────────────────
+        // ════════════════════════════════════════════════════════
+        const packetDataStore = {}; // { no: packetData }
+
+        // ARCHIVE/HIGHLIGHT 탭에서 행 렌더링 시 데이터 저장 (sendFilter 함수 내)
+        // result.data.forEach 부분에서 호출됨 — 아래 패치로 기존 로직에 추가
+        const _origSendFilter = sendFilter;
+
+        // 저장소 채우기: sendFilter가 결과를 렌더링할 때 packetDataStore에도 저장
+        // (기존 sendFilter 코드 내 result.data.forEach 에서 packetDataStore[data.no] = data 삽입)
+        // → 아래 socket 'new_packet' 핸들러에서도 실시간 패킷 저장
+        onSocket('new_packet', (data) => {
+            // 실시간 패킷도 저장소에 저장
+            packetDataStore[data.no] = data;
+        });
+
+        // ── 배치 분석 버튼 ────────────────────────────────────────
+        const batchAnalyzeBtn = document.getElementById('batchAnalyzeBtn');
+        const batchResultModal = document.getElementById('batchResultModal');
+        const closeBatchModal = document.getElementById('closeBatchModal');
+        const batchResultBody = document.getElementById('batchResultBody');
+
+        if (closeBatchModal) {
+            closeBatchModal.addEventListener('click', () => batchResultModal.classList.remove('active'));
+        }
+
+        if (batchAnalyzeBtn) {
+            batchAnalyzeBtn.addEventListener('click', async () => {
+                const checkedBoxes = document.querySelectorAll('.row-checkbox:checked');
+                if (checkedBoxes.length === 0) {
+                    alert('분석할 패킷을 체크박스로 선택해주세요.');
+                    return;
+                }
+
+                // 선택된 패킷 데이터 수집
+                const selectedPackets = [];
+                checkedBoxes.forEach(cb => {
+                    const no = parseInt(cb.value, 10);
+                    const row = cb.closest('.packet-row');
+                    // 행에서 기본 정보 추출
+                    const cells = row.querySelectorAll('div:not(.col-checkbox)');
+                    const pkt = packetDataStore[no] || {
+                        no,
+                        src: cells[2]?.textContent?.trim() || '?',
+                        dst: cells[3]?.textContent?.trim() || '?',
+                        proto: cells[4]?.textContent?.trim() || '?',
+                        direction: cells[5]?.textContent?.trim() || '?',
+                        len: cells[6]?.textContent?.trim() || '?',
+                        summary: ''
+                    };
+                    selectedPackets.push(pkt);
+                });
+
+                // 모달 표시 (로딩)
+                batchResultBody.innerHTML = `
+                    <div style="padding: 40px 0; text-align: center; color: var(--text-secondary);">
+                        <div class="spinner" style="margin: 0 auto 12px;"></div>
+                        <div>${selectedPackets.length}개 패킷 AI 분석 중...</div>
+                    </div>`;
+                batchResultModal.classList.add('active');
+
+                try {
+                    const res = await fetch('/api/analyze-batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ packets: selectedPackets })
+                    });
+                    const result = await res.json();
+
+                    if (result.success) {
+                        const riskColor = result.risk_color || '#8888a8';
+                        const patternsHtml = result.patterns && result.patterns.length
+                            ? `<div class="ai-tags" style="margin: 8px 0;">${result.patterns.map(p => `<span class="ai-tag">${p}</span>`).join('')}</div>`
+                            : '';
+                        batchResultBody.innerHTML = `
+                            <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 0.8rem; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: ${riskColor}22; color: ${riskColor}; border: 1px solid ${riskColor}44;">
+                                    ${result.risk_level === 'HIGH' ? '🔴' : result.risk_level === 'MEDIUM' ? '🟡' : '🟢'} ${result.risk_level}
+                                </span>
+                                <span style="font-size: 0.78rem; color: var(--text-dim);">${result.packet_count}개 패킷 분석 완료</span>
+                            </div>
+                            ${patternsHtml}
+                            <div style="font-size: 0.85rem; line-height: 1.7; color: var(--text-primary); margin-bottom: 12px;">${result.summary}</div>
+                            ${result.recommendations ? `<div style="padding: 10px 12px; background: var(--bg-tertiary); border-radius: 6px; font-size: 0.82rem; color: var(--text-secondary); border-left: 3px solid ${riskColor};">
+                                💡 <strong>권고사항:</strong> ${result.recommendations}
+                            </div>` : ''}`;
+                    } else {
+                        batchResultBody.innerHTML = `<div class="ai-error" style="padding: 20px;">⚠ ${result.error || '분석에 실패했습니다.'}</div>`;
+                    }
+                } catch (e) {
+                    batchResultBody.innerHTML = `<div class="ai-error" style="padding: 20px;">⚠ 서버 통신 오류: ${e.message}</div>`;
+                }
+            });
+        }
+
+        // ── 알림 벨 버튼 & 드롭다운 패널 ─────────────────────────
+        const alertBellBtn = document.getElementById('alertBellBtn');
+        const alertPanel = document.getElementById('alertPanel');
+        const alertBadge = document.getElementById('alertBadge');
+        const alertList = document.getElementById('alertList');
+        const clearAlertsBtn = document.getElementById('clearAlertsBtn');
+        let alertCount = 0;
+        let alertPanelOpen = false;
+
+        if (alertBellBtn) {
+            alertBellBtn.addEventListener('click', () => {
+                alertPanelOpen = !alertPanelOpen;
+                alertPanel.style.display = alertPanelOpen ? 'block' : 'none';
+                if (alertPanelOpen) {
+                    // 패널 열면 배지 초기화
+                    alertBadge.style.display = 'none';
+                    alertBadge.textContent = '0';
+                    alertCount = 0;
+                }
+            });
+        }
+
+        if (clearAlertsBtn) {
+            clearAlertsBtn.addEventListener('click', () => {
+                alertList.innerHTML = '<div style="padding: 16px 12px; color: var(--text-dim); text-align: center;">알림 없음</div>';
+                alertCount = 0;
+                alertBadge.style.display = 'none';
+            });
+        }
+
+        // ── ai_alert 소켓 이벤트 수신 ─────────────────────────────
+        const alertDetailModal = document.getElementById('alertDetailModal');
+        const alertDetailBody = document.getElementById('alertDetailBody');
+        const alertDetailTitle = document.getElementById('alertDetailTitle');
+        const closeAlertDetailModal = document.getElementById('closeAlertDetailModal');
+
+        if (closeAlertDetailModal) {
+            closeAlertDetailModal.addEventListener('click', () => alertDetailModal.classList.remove('active'));
+        }
+
+        function openAlertDetail(packet, analysis) {
+            const riskColor = analysis.risk_color || '#8888a8';
+            const tagsHtml = analysis.tags && analysis.tags.length
+                ? `<div class="ai-tags" style="margin: 8px 0;">${analysis.tags.map(t => `<span class="ai-tag">${t}</span>`).join('')}</div>`
+                : '';
+            alertDetailTitle.innerHTML = `🤖 AI 위협 분석 — <span style="font-size:0.8rem; color:var(--text-secondary);">${packet.src} → ${packet.dst}</span>`;
+            alertDetailBody.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                    <span style="font-size:0.82rem; font-weight:700; padding: 3px 12px; border-radius:20px;
+                        background:${riskColor}22; color:${riskColor}; border:1px solid ${riskColor}44;">
+                        ${analysis.risk_level === 'HIGH' ? '🔴' : analysis.risk_level === 'MEDIUM' ? '🟡' : '🟢'} ${analysis.risk_level}
+                    </span>
+                    <span style="font-size:0.78rem; color:var(--text-dim);">${packet.proto} | ${packet.len ?? '?'} bytes | ${packet.direction ?? '?'}</span>
+                </div>
+                ${tagsHtml}
+                <div style="font-size:0.85rem; line-height:1.75; color:var(--text-primary); padding: 10px 0; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); margin-bottom: 10px;">
+                    ${analysis.analysis}
+                </div>
+                <div style="font-size:0.78rem; color:var(--text-dim);">
+                    <span style="margin-right:12px;">📤 출발지: <strong style="color:var(--text-secondary);">${packet.src}</strong></span>
+                    <span>📥 목적지: <strong style="color:var(--text-secondary);">${packet.dst}</strong></span>
+                </div>`;
+            alertDetailModal.classList.add('active');
+        }
+
+        onSocket('ai_alert', ({ packet, analysis }) => {
+            const riskColor = analysis.risk_color || '#8888a8';
+            const tagsHtml = analysis.tags && analysis.tags.length
+                ? analysis.tags.map(t => `<span style="font-size:0.68rem; padding: 1px 6px; border-radius: 10px; background: var(--bg-tertiary); color: var(--text-secondary); margin-right: 3px;">${t}</span>`).join('')
+                : '';
+            const itemHtml = `
+                <div class="alert-item" style="padding: 8px 12px; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background 0.15s;"
+                    onmouseenter="this.style.background='var(--bg-tertiary)'" onmouseleave="this.style.background=''"
+                    data-packet='${JSON.stringify(packet).replace(/'/g, "&apos;")}'
+                    data-analysis='${JSON.stringify(analysis).replace(/'/g, "&apos;")}'>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 3px;">
+                        <span style="width: 8px; height: 8px; border-radius: 50%; background: ${riskColor}; flex-shrink: 0;"></span>
+                        <span style="font-weight: 600; color: var(--text-primary); font-size:0.82rem;">${packet.src} → ${packet.dst}</span>
+                        <span style="color: var(--text-dim); font-size: 0.7rem; margin-left: auto;">${packet.proto}</span>
+                    </div>
+                    <div style="font-size:0.75rem; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${analysis.analysis?.substring(0,60)}...</div>
+                </div>`;
+
+            // 첫 알림이면 '알림 없음' 텍스트 제거
+            if (alertList.children.length === 0 || alertList.querySelector('div[style*="text-align: center"]')) {
+                alertList.innerHTML = '';
+            }
+            alertList.insertAdjacentHTML('afterbegin', itemHtml);
+
+            // 방금 추가된 항목에 클릭 이벤트 연결
+            alertList.firstElementChild.addEventListener('click', function() {
+                const p = JSON.parse(this.dataset.packet);
+                const a = JSON.parse(this.dataset.analysis);
+                openAlertDetail(p, a);
+            });
+
+            // 패널이 닫혀있으면 배지 표시
+            if (!alertPanelOpen) {
+                alertCount++;
+                alertBadge.textContent = alertCount > 9 ? '9+' : alertCount;
+                alertBadge.style.display = 'block';
+                // 벨 아이콘 잠깐 흔들기 효과
+                alertBellBtn.style.transform = 'scale(1.3)';
+                setTimeout(() => { alertBellBtn.style.transform = ''; }, 300);
+            }
+        });
+
+        // ── 자동 AI 분석 토글 ─────────────────────────────────────
+        const autoAnalysisToggle = document.getElementById('autoAnalysisToggle');
+        const autoAnalysisStatus = document.getElementById('autoAnalysisStatus');
+        let autoAnalysisEnabled = false;
+
+        if (autoAnalysisToggle) {
+            autoAnalysisToggle.addEventListener('click', async () => {
+                autoAnalysisEnabled = !autoAnalysisEnabled;
+                try {
+                    await fetch('/api/auto-analysis-toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: autoAnalysisEnabled })
+                    });
+                    autoAnalysisStatus.textContent = autoAnalysisEnabled ? 'ON' : 'OFF';
+                    autoAnalysisStatus.style.color = autoAnalysisEnabled ? 'var(--accent-green, #3ecf8e)' : 'var(--text-dim)';
+                    autoAnalysisToggle.style.borderColor = autoAnalysisEnabled ? 'rgba(62,207,142,0.4)' : 'var(--border-color)';
+                } catch (e) {
+                    autoAnalysisEnabled = !autoAnalysisEnabled; // 롤백
+                }
+            });
+        }

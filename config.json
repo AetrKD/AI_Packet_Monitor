@@ -1,12 +1,13 @@
 {
     "server": {
         "host": "0.0.0.0",
-        "port": 25565
+        "port": 25565,
+        "iface": null
     },
     "ai": {
-        "api_key": "lm-studio",
-        "base_url": "http://127.0.0.1:1234/v1",
-        "model": "google/gemma-3-4b",
+        "api_key": "AIzaSyBHArsOnuQlLVho6UGhRzNdLgHt1muTVu8",
+        "base_url": "",
+        "model": "models/gemini-1.5-flash-latest",
         "timeout": 30,
         "disable_thinking": true
     }
