@@ -1,5 +1,6 @@
 ```
 Flask 기반에서 FastAPI 기반으로 리팩토링을 진행하여 전체적인 구조가 변경됨에 따라 해당 프로젝트는 다른 repository에서 진행됩니다
+https://github.com/AetrKD/NetScope
 ```
 
 # AI 패킷 모니터
